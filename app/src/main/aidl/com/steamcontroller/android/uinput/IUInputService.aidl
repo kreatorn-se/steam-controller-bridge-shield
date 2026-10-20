@@ -1,5 +1,7 @@
 package com.steamcontroller.android.uinput;
 
+import android.os.ParcelFileDescriptor;
+
 // Runs in the Shizuku user service process (shell UID).
 //
 // Fronts the virtual-output backends: /dev/uinput when the shell UID is allowed to open
@@ -40,6 +42,11 @@ interface IUInputService {
     // Same, but returns captured stdout (trimmed, capped) instead of the exit code, or null on failure.
     // Used to read a Settings value before overriding it, so it can be restored later.
     String runShellCommandForOutput(in String[] cmd);
+
+    // Self-update: runs exactly `pm install -r -S <size>` with the APK's bytes on stdin, read from
+    // [apk] (a file in the app's private storage; the app verified package, signer and version
+    // first). Returns pm's exit code, or -1 if refused or failed.
+    int installApk(in ParcelFileDescriptor apk, long size);
 
     void destroy();
 }

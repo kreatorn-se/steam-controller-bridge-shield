@@ -17,7 +17,10 @@ import java.util.concurrent.TimeUnit
  * Diagnostics to Gamehub (POST /api/device/v1/diag, `{appVersion, logs: [{t, level, tag, msg}],
  * crashes: [{t, thread, stack, appVersion}]}`): the existing Diagnostics history plus the
  * TV's own notes (home load timings), in batches every two minutes while the app or the
- * controller service runs, at once after an error, and a crash report on the next start.
+ * controller service runs, soon after an error (at most one such early send per two minutes),
+ * and a crash report on the next start. A batch is at most 60 lines and 48 KB of UTF-8 JSON;
+ * every send runs on this object's single thread, one at a time. The hub may answer 200
+ * `{dropped: n}` when it trims a batch: that is still a success.
  *
  * Redacted: never the token (and nothing that looks like one), no file contents, no user text.
  * Off switch on DEVICE. A hub without the endpoint (404) is left alone: the data is dropped.
@@ -25,15 +28,19 @@ import java.util.concurrent.TimeUnit
 object Diag {
     private const val PREFS = "diag"
     private const val K_ON = "upload"
-    private const val MAX_BATCH = 200
-    private const val MAX_CRASH = 16 * 1024
+    private const val MAX_BATCH = 200          // notes kept while waiting to be sent
+    private const val MAX_LINES = 60           // per request
+    private const val MAX_BYTES = 48 * 1024    // per request, serialized UTF-8
+    private const val MAX_CRASH = 12 * 1024
     private const val MAX_MSG = 300
+    private const val ERROR_SEND_GAP_MS = 120_000L
 
     private val exec = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "diag").apply { isDaemon = true } }
     private class Note(val t: Long, val level: String, val tag: String, val msg: String)
     private val notes = ArrayList<Note>()
-    private var mark = 0L
+    @Volatile private var mark = 0L
     private var soon: ScheduledFuture<*>? = null
+    private var lastErrorSend = 0L
     @Volatile private var app: Context? = null
 
     fun enabled(c: Context): Boolean = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_ON, true)
@@ -63,21 +70,38 @@ object Diag {
         }
     }
 
-    /** Something went wrong: note it and send soon. */
+    /** Something went wrong: note it, and send soon unless an error batch went out lately. */
     fun error(line: String) {
         note(line, "e")
+        val now = android.os.SystemClock.elapsedRealtime()
+        synchronized(this) {
+            if (lastErrorSend != 0L && now - lastErrorSend < ERROR_SEND_GAP_MS) return
+            lastErrorSend = now
+        }
         flushSoon(5_000L)
     }
 
     fun flushSoon(delayMs: Long) {
         synchronized(this) {
             soon?.cancel(false)
-            soon = exec.schedule({ flush() }, delayMs, TimeUnit.MILLISECONDS)
+            soon = exec.schedule({ safeFlush() }, delayMs, TimeUnit.MILLISECONDS)
         }
     }
 
-    /** One batch now (background thread). */
-    fun flush() {
+    /** The periodic batch (Background): queued on the diag thread like every other send. */
+    fun flushNow() {
+        exec.execute { safeFlush() }
+    }
+
+    // Its own lock (not this object's), so error() never waits on a send in progress.
+    private val flushLock = Any()
+
+    private fun safeFlush() {
+        try { synchronized(flushLock) { flush() } } catch (_: Throwable) {}
+    }
+
+    /** One batch; only ever on [exec], and never two at once. */
+    private fun flush() {
         val c = app ?: return
         if (!enabled(c) || !GamehubStore.isLinked(c) || GamehubTv.Missing.has(c, "diag")) {
             synchronized(notes) { notes.clear() }
@@ -87,26 +111,59 @@ object Diag {
         }
         val files = crashFiles(c)
         if (files.isNotEmpty()) {
+            // As many crash reports as fit; the rest go with the next batch.
             val crashes = JSONArray()
-            for (f in files) try { crashes.put(JSONObject(f.readText())) } catch (_: Throwable) {}
-            val r = send(c, JSONArray(), crashes)
-            if (r != Sent.RETRY) files.forEach { it.delete() }
-            if (r == Sent.MISSING) return
+            val sent = ArrayList<File>()
+            var bytes = ENVELOPE
+            for (f in files) {
+                val o = try { JSONObject(f.readText()) } catch (_: Throwable) { f.delete(); continue }
+                val n = utf8(o.toString()) + 1
+                if (sent.isNotEmpty() && bytes + n > MAX_BYTES) break
+                crashes.put(o); sent.add(f); bytes += n
+            }
+            if (sent.isNotEmpty()) {
+                val r = send(c, JSONArray(), crashes)
+                if (r != Sent.RETRY) sent.forEach { it.delete() }
+                if (r == Sent.MISSING) return
+            }
         }
         val (newMark, recent) = Diagnostics.since(mark)
-        val logs = JSONArray()
         val now = System.currentTimeMillis()
-        // The service's history: each line carries its own timestamp in the text.
-        // Kept under the hub's 64 KB per request.
-        for (l in recent.takeLast(80)) logs.put(JSONObject().put("t", now).put("level", "i").put("tag", "app").put("msg", redact(l).take(MAX_MSG)))
-        val ours = synchronized(notes) { val copy = notes.toList(); notes.clear(); copy }
-        for (n in ours.takeLast(70)) logs.put(JSONObject().put("t", n.t).put("level", n.level).put("tag", n.tag).put("msg", n.msg))
+        // Our own notes first (errors, timings); what does not fit waits for the next batch.
+        // The service's history fills the rest, newest first; older lines are dropped.
+        val ours = synchronized(notes) { notes.toList() }
+        val logs = JSONArray()
+        var bytes = ENVELOPE
+        var taken = 0
+        for (n in ours) {
+            val o = JSONObject().put("t", n.t).put("level", n.level).put("tag", n.tag).put("msg", n.msg)
+            val size = utf8(o.toString()) + 1
+            if (logs.length() >= MAX_LINES || bytes + size > MAX_BYTES) break
+            logs.put(o); bytes += size; taken++
+        }
+        val service = ArrayList<JSONObject>()
+        // Each service line carries its own timestamp in the text.
+        for (l in recent.asReversed()) {
+            if (logs.length() + service.size >= MAX_LINES) break
+            val o = JSONObject().put("t", now).put("level", "i").put("tag", "app").put("msg", redact(l).take(MAX_MSG))
+            val size = utf8(o.toString()) + 1
+            if (bytes + size > MAX_BYTES) break
+            service.add(o); bytes += size
+        }
+        for (o in service.asReversed()) logs.put(o)
         if (logs.length() == 0) { mark = newMark; return }
         when (send(c, logs, null)) {
-            Sent.OK, Sent.MISSING -> mark = newMark
-            Sent.RETRY -> synchronized(notes) { notes.addAll(0, ours.takeLast(MAX_BATCH / 2)) }
+            Sent.OK, Sent.MISSING -> {
+                mark = newMark
+                val gone = ours.take(taken).toHashSet() // by identity: note() may have trimmed the front meanwhile
+                synchronized(notes) { notes.removeAll { it in gone } }
+            }
+            Sent.RETRY -> {} // notes stay queued; the service lines are offered again
         }
     }
+
+    private const val ENVELOPE = 512 // appVersion and the JSON around the arrays
+    private fun utf8(s: String) = s.toByteArray(Charsets.UTF_8).size
 
     private enum class Sent { OK, RETRY, MISSING }
 

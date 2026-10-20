@@ -86,8 +86,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
     private val main = Handler(Looper.getMainLooper())
     private val ring = HoldRing(ctx)
     private var ringAnim: ValueAnimator? = null
-    private var armed = false
-    private var fired = false
+    private val keys = HoldKeys()
     private var target: View? = null
     private var menu: Menu? = null
     private var undo: View? = null
@@ -103,33 +102,23 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
 
     // ── detecting the hold on pages ───────────────────────────────────────────────────
 
-    /** Keys while no overlay is open. True consumes. */
+    /** Keys while no overlay is open. True consumes. The rules live in [HoldKeys]. */
     fun pageKey(e: KeyEvent): Boolean {
-        val k = e.keyCode
-        if (!Keys.isSelect(k)) {
-            if (armed && e.action == KeyEvent.ACTION_DOWN) cancel()
-            return false
+        val down = e.action == KeyEvent.ACTION_DOWN
+        val v = if (down && e.repeatCount == 0 && HoldKeys.isSelect(e.keyCode)) ctx.currentFocus else null
+        val item = v?.getTag(R.id.hold_item) as? HoldItem
+        return when (keys.page(e.keyCode, down, e.repeatCount, item != null)) {
+            HoldKeys.Act.PASS -> false
+            HoldKeys.Act.CONSUME -> { if (!down) target?.isPressed = false; true }
+            HoldKeys.Act.ARM -> { arm(v) { openMenu(item!!, pageContext) }; false }
+            HoldKeys.Act.CANCEL -> { cancel(); false }
         }
-        if (e.action == KeyEvent.ACTION_DOWN) {
-            if (e.repeatCount == 0 && !armed) {
-                fired = false
-                val v = ctx.currentFocus ?: return false
-                val item = v.getTag(R.id.hold_item) as? HoldItem ?: return false
-                arm(v) { openMenu(item, pageContext) }
-                return false // the view still sees the press, so a tap clicks as today
-            }
-            return armed || fired // repeats while holding
-        }
-        // ACTION_UP (and the canceled fallback release after a long press)
-        if (fired) { target?.isPressed = false; return true }
-        if (armed) cancel()
-        return false
     }
 
     /** Starts the ring over [v] (null: bottom centre, show mode) and [fire] after 1.5 s. */
     fun arm(v: View?, fire: () -> Unit) {
         cancel()
-        armed = true
+        keys.arm()
         target = v
         place(v)
         ring.progress = 0f
@@ -152,9 +141,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
 
     private var pendingFire: (() -> Unit)? = null
     private val fireRunnable = Runnable {
-        if (armed) {
-            armed = false
-            fired = true
+        if (keys.fire()) {
             target?.isPressed = false
             ring.animate().alpha(0f).setDuration(Motion.FAST).start()
             pendingFire?.invoke()
@@ -162,15 +149,15 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
     }
 
     fun cancel() {
-        armed = false
+        keys.cancel()
         main.removeCallbacks(fireRunnable)
         ringAnim?.cancel()
         ring.alpha = 0f
     }
 
     /** True once a hold fired, until the next fresh press. */
-    val firedHold: Boolean get() = fired
-    fun clearFired() { fired = false }
+    val firedHold: Boolean get() = keys.fired
+    fun clearFired() = keys.clearFired()
 
     private fun place(v: View?) {
         val lp = ring.layoutParams as FrameLayout.LayoutParams
@@ -213,12 +200,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             return true
         }
         // After the long press, its own release and repeats must not reach the menu's rows.
-        if (fired && Keys.isSelect(e.keyCode)) {
-            if (e.action == KeyEvent.ACTION_UP) { fired = false; return true }
-            if (e.repeatCount > 0) return true
-            fired = false
-        }
-        return false
+        return keys.menu(e.keyCode, e.action == KeyEvent.ACTION_DOWN, e.repeatCount)
     }
 
     fun openMenu(item: HoldItem, hc: HoldContext? = null) {
@@ -304,10 +286,12 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             rows { r ->
                 val fav = shot.favorite
                 r.add(row(ctx.getString(if (fav) R.string.hold_unfavourite else R.string.hold_favourite), tag = if (fav) "♥" else null, tagColor = C.danger) { favourite() })
-                r.add(row(ctx.getString(R.string.hold_album)) { albums() })
-                if (!GamehubTv.Missing.has(ctx, "people")) r.add(row(ctx.getString(R.string.hold_people), hint = shot.people.takeIf { it.isNotEmpty() }?.let { Fmt.people(it) }) { people() })
+                // Gated only by GET probes of the lists (1.4.1 also marked these after a write's
+                // 404, hence the new keys), never by a failed write.
+                if (!GamehubTv.Missing.has(ctx, "albums_list")) r.add(row(ctx.getString(R.string.hold_album)) { albums() })
+                if (!GamehubTv.Missing.has(ctx, "people_list")) r.add(row(ctx.getString(R.string.hold_people), hint = shot.people.takeIf { it.isNotEmpty() }?.let { Fmt.people(it) }) { people() })
                 val game = shot.game
-                if (game != null && !GamehubTv.Missing.has(ctx, "background")) r.add(row(ctx.getString(R.string.hold_background)) { background(game) })
+                if (game != null) r.add(row(ctx.getString(R.string.hold_background)) { background(game) })
                 r.add(row(ctx.getString(R.string.hold_slideshow)) { close(); hc.slideshowFrom(item) })
                 r.add(row(ctx.getString(R.string.hold_session)) { close(); hc.showSession(item) })
                 if (game != null) r.add(row(ctx.getString(R.string.hold_hub)) { close(); hc.openHub(game) })
@@ -340,8 +324,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
                 val r = withContext(Dispatchers.IO) { GamehubTv.setBackground(ctx, game, shot.id) }
                 when {
                     r is GamehubTv.Res.Ok -> { Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.hold_background_done, game)); hc.changed(item, false) }
-                    r is GamehubTv.Res.Err && r.fail == GamehubTv.Fail.NOT_DEPLOYED -> { GamehubTv.Missing.mark(ctx, "background"); Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_needs_update)) }
-                    else -> Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_failed))
+                    r is GamehubTv.Res.Err -> failed(r)
                 }
             }
         }
@@ -349,7 +332,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         private fun albums() = page {
             rows { r -> r.add(row(ctx.getString(R.string.tv_loading_title)) {}) }
             ctx.lifecycleScope.launch {
-                val list = withContext(Dispatchers.IO) { GamehubTv.albums(ctx).valueOrNull() ?: GamehubTv.cachedList(ctx, "albums") ?: emptyList() }
+                val list = withContext(Dispatchers.IO) { GamehubTv.albums(ctx) }.let { r -> probe(r, "albums_list") ?: withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "albums") } ?: emptyList() }
                 if (menu == null || stack.lastOrNull() == null) return@launch
                 rows { r ->
                     r.add(row(ctx.getString(R.string.hold_album_new)) { newAlbum() })
@@ -366,7 +349,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
                 if (name.isBlank()) return@promptName
                 ctx.lifecycleScope.launch {
                     val r = withContext(Dispatchers.IO) { GamehubTv.createAlbum(ctx, name) }
-                    if (r is GamehubTv.Res.Ok) addTo(r.value, name) else failed(r as GamehubTv.Res.Err, "albums")
+                    if (r is GamehubTv.Res.Ok) addTo(r.value, name) else failed(r as GamehubTv.Res.Err)
                 }
             }
         }
@@ -376,19 +359,36 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             ctx.lifecycleScope.launch {
                 val r = withContext(Dispatchers.IO) { GamehubTv.addToAlbum(ctx, albumId, listOf(shot.id)) }
                 if (r is GamehubTv.Res.Ok) { Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.hold_album_done, name)); hc.changed(item, false) }
-                else failed(r as GamehubTv.Res.Err, "albums")
+                else failed(r as GamehubTv.Res.Err)
             }
         }
 
-        private fun failed(e: GamehubTv.Res.Err, feature: String) {
-            if (e.fail == GamehubTv.Fail.NOT_DEPLOYED) { GamehubTv.Missing.mark(ctx, feature); Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_needs_update)) }
-            else Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_failed))
+        /**
+         * A write failed. Writes never hide a menu row: a 404 there means the shot or album is
+         * gone (refresh), not that the hub lacks the call. Only a GET probe marks a feature
+         * missing ([probe]).
+         */
+        private fun failed(e: GamehubTv.Res.Err) {
+            when (e.fail) {
+                GamehubTv.Fail.GONE -> { Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_not_saved)); hc.changed(item, false) }
+                GamehubTv.Fail.NOT_DEPLOYED -> Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_needs_update))
+                else -> Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_failed))
+            }
+        }
+
+        /** A submenu's list read; a 404 there means the hub has no such list yet. */
+        private fun <T> probe(r: GamehubTv.Res<T>, feature: String): T? {
+            if (r is GamehubTv.Res.Err && r.fail == GamehubTv.Fail.NOT_DEPLOYED) {
+                GamehubTv.Missing.mark(ctx, feature)
+                Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.hold_needs_update))
+            }
+            return r.valueOrNull()
         }
 
         private fun people() = page {
             rows { r -> r.add(row(ctx.getString(R.string.tv_loading_title)) {}) }
             ctx.lifecycleScope.launch {
-                val list = withContext(Dispatchers.IO) { GamehubTv.people(ctx).valueOrNull() ?: GamehubTv.cachedList(ctx, "people") ?: emptyList() }
+                val list = withContext(Dispatchers.IO) { GamehubTv.people(ctx) }.let { r -> probe(r, "people_list") ?: withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "people") } ?: emptyList() }
                 if (menu == null) return@launch
                 // People are tagged by id; the hub's /people list has both.
                 renderPeople(list.map { it.collection.removePrefix("person:") to it.title })
@@ -420,7 +420,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
                     }
                     is GamehubTv.Res.Err -> {
                         shot.peopleIds = beforeIds; shot.people = beforeNames
-                        failed(r, "people")
+                        failed(r)
                     }
                 }
                 if (menu != null && stack.isNotEmpty()) renderPeople(all)

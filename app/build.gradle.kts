@@ -143,4 +143,6 @@ dependencies {
         exclude(group = "junit")
         exclude(group = "org.graalvm.buildtools")
     }
+    // Plain JVM tests for pure logic (key sequences); never part of the APK.
+    testImplementation(libs.junit)
 }

@@ -511,11 +511,9 @@ class ControllerService : Service() {
     }
 
     private var loggedNoUsagePerm = false
+    private val GEFORCE_NOW_PACKAGE = "com.nvidia.geforcenow"
 
     private fun tickForegroundAppMonitor() {
-        // On the Shield everything runs inside GeForce NOW, so the foreground app says nothing about
-        // the game: profiles follow Steam's Now playing instead (hub/SteamSwitch). Kept for phones.
-        if (packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) return
         if (!UsageStatsHelper.hasPermission(this)) {
             if (!loggedNoUsagePerm) {
                 Log.w(TAG, "Auto-switch inert: PACKAGE_USAGE_STATS not granted")
@@ -531,6 +529,9 @@ class ControllerService : Service() {
         lastForegroundPackage = current
         // Ignore self - opening our own UI shouldn't trigger anything.
         if (current == packageName) return
+        // Inside GeForce NOW the app says nothing about the game: there profiles follow Steam's
+        // Now playing (hub/SteamSwitch). Other bound apps (RetroArch, Moonlight...) still switch.
+        if (current == GEFORCE_NOW_PACKAGE) return
 
         val bound =
             Prefs

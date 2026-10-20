@@ -117,6 +117,8 @@ class ShowMode(
     private var stage = Stage.NORMAL
     private var playing = true
     private val calm = req.calm
+    /** The screensaver: any input closes it, and the waking input goes nowhere else. */
+    val isCalm: Boolean get() = calm && !closed
     private var interval = req.intervalSec?.coerceIn(3, 600) ?: TvPrefs.interval(ctx)
     private var captionGame: String? = null
     private var captionShown = false

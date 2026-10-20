@@ -171,7 +171,6 @@ class DevicePage(host: Host) : Page(host) {
             }
         }
         add(right, updateRow!!)
-        com.steamcontroller.android.update.Updater.observe { st -> renderUpdate(st) }
         add(right, ActionRow(ctx, ctx.getString(R.string.dev_about), "Gamehub ${BuildConfig.VERSION_NAME} · controller bridge", ctx.getString(R.string.dev_source)) {
             try {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB)))
@@ -229,8 +228,18 @@ class DevicePage(host: Host) : Page(host) {
 
     private var shown = false
 
-    override fun onShow() { shown = true; slowAt = 0L; renderBt() }
-    override fun onHide() { shown = false }
+    // Observed only while shown: the Updater is a process-wide singleton and would otherwise keep
+    // this page (and its activity) alive after the activity is gone.
+    private val updateListener: (com.steamcontroller.android.update.Updater.State) -> Unit = { st -> renderUpdate(st) }
+
+    override fun onShow() {
+        shown = true; slowAt = 0L; renderBt()
+        com.steamcontroller.android.update.Updater.observe(updateListener)
+    }
+    override fun onHide() {
+        shown = false
+        com.steamcontroller.android.update.Updater.remove(updateListener)
+    }
 
     /** Bluetooth: the paired controller to use (after the permission prompt on Android 12+). */
     private fun renderBt(explicit: Boolean = false) {

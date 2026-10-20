@@ -24,7 +24,7 @@ object Background {
         Diag.install(app)
         val e = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "gamehub-bg").apply { isDaemon = true } }
         exec = e
-        e.scheduleWithFixedDelay({ safe { Diag.flush() } }, 30, 120, TimeUnit.SECONDS)
+        e.scheduleWithFixedDelay({ safe { Diag.flushNow() } }, 30, 120, TimeUnit.SECONDS)
         e.scheduleWithFixedDelay({ safe { Updater.checkIfDue(app) } }, 5, 30 * 60, TimeUnit.SECONDS)
         fun steam(delayMs: Long) {
             if (e.isShutdown) return

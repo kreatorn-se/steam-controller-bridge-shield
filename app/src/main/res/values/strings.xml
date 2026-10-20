@@ -155,6 +155,8 @@
     <string name="prof_hint_switch">to switch</string>
     <string name="prof_mode_gamepad">Gamepad · Xbox 360</string>
     <string name="prof_mode_desktop">Desktop · mouse and keyboard</string>
+    <string name="prof_app_bound_hint">Switches to this profile when the app opens · select to remove</string>
+    <string name="prof_app_removed">%1$s no longer switches this profile</string>
     <string name="prof_not_bound">Not bound to an app</string>
     <string name="prof_sheet_eyebrow">Profile</string>
     <string name="prof_apply">Apply</string>
@@ -446,6 +448,7 @@
     <string name="hold_fav_done">Favourite</string>
     <string name="hold_unfav_done">Not a favourite</string>
     <string name="hold_failed">Not saved · try again</string>
+    <string name="hold_not_saved">Not saved · refresh</string>
     <string name="hold_needs_update">Update Gamehub for this</string>
     <string name="hold_recent">Recent</string>
     <string name="hold_source_friend">A friend</string>
@@ -485,6 +488,7 @@
     <string name="lib_sort_name">Name</string>
 
     <!-- ━━━━━━━━━━━━ 1.4.1: Steam profiles, update, diagnostics ━━━━━━━━━━━━ -->
+    <string name="steam_restored">Settings from before the game are back</string>
     <string name="steam_bind">Bind to Steam game…</string>
     <string name="steam_bind_none_yet">Switch to this profile while a chosen game runs</string>
     <plurals name="steam_games">
@@ -505,8 +509,11 @@
     <string name="update_checking">Checking for updates</string>
     <string name="update_needs_service">Start the controller service first: it installs the update</string>
     <string name="update_checksum">Download damaged · not installed</string>
+    <string name="update_no_digest">The release lists no checksum · not installed</string>
+    <string name="update_signer">Not signed like this app · not installed</string>
+    <string name="update_not_newer">That build is not newer than this one · not installed</string>
     <string name="update_download_failed">Download failed · try again</string>
-    <string name="update_install_failed">Android refused the update (a build signed with another key?) · install it from the PC once</string>
+    <string name="update_install_failed">Android refused the update · install it from the PC once</string>
     <string name="dev_update">App update</string>
     <string name="dev_update_hint">From GitHub releases, installed through Shizuku</string>
     <string name="dev_diag_upload">Send diagnostics to Gamehub</string>

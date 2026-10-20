@@ -12,8 +12,10 @@ import com.steamcontroller.android.ui.pill.Pill
  * Profiles that follow Steam (replaces "bind to app", which cannot work inside GeForce NOW):
  * while the controller service runs and the Shield is linked, Gamehub's `GET /api/device/v1/now`
  * is polled. When the game changes to one a profile is bound to (NamedProfile.steamAppIds), that
- * profile is applied through the normal named-profile path; when the game ends, the profile from
- * before the switch comes back - unless Kent picked another one by hand during that game.
+ * profile is applied through the normal named-profile path. Just before the first switch, every
+ * live setting is snapshotted (a hidden profile in these prefs), so when the game ends exactly
+ * what was live comes back - unsaved tweaks, or no named profile at all, included - unless Kent
+ * picked another profile by hand during that game.
  *
  * State is kept in preferences so a service restart in the middle of a game loses nothing.
  */
@@ -23,6 +25,7 @@ object SteamSwitch {
     private const val K_APP = "appid"        // last appid seen (0 = none)
     private const val K_AUTO = "auto"        // profile id we applied for it
     private const val K_BEFORE = "before"    // profile id active before that ("" = none)
+    private const val K_SNAP = "snapshot"    // live settings before the switch (NamedProfile JSON)
 
     private fun p(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -53,7 +56,10 @@ object SteamSwitch {
         val bound = if (appid > 0) profiles.firstOrNull { appid in it.steamAppIds } else null
         when {
             bound != null -> {
-                if (auto == null || manual) prefs.edit().putString(K_BEFORE, active ?: "").apply()
+                if (auto == null || manual) {
+                    val snap = Prefs.captureCurrentAsProfile(c, "steam-switch-snapshot")
+                    prefs.edit().putString(K_BEFORE, active ?: "").putString(K_SNAP, snap.toJson().toString()).apply()
+                }
                 if (active != bound.id) switchTo(c, bound)
                 prefs.edit().putString(K_AUTO, bound.id).apply()
                 Diag.note("steam switch: app $appid -> profile")
@@ -61,11 +67,26 @@ object SteamSwitch {
             auto != null -> {
                 // The bound game ended (or another, unbound one started): back to before.
                 val before = prefs.getString(K_BEFORE, "") ?: ""
-                if (!manual && before.isNotEmpty()) profiles.firstOrNull { it.id == before }?.let { switchTo(c, it) }
-                prefs.edit().remove(K_AUTO).remove(K_BEFORE).apply()
-                Diag.note("steam switch: game ended, restored=${!manual && before.isNotEmpty()}")
+                val snap = prefs.getString(K_SNAP, null)?.let { runCatching { NamedProfile.fromJson(org.json.JSONObject(it)) }.getOrNull() }
+                val restored = when {
+                    manual -> false
+                    snap != null -> { restore(c, snap, profiles.firstOrNull { it.id == before }); true }
+                    before.isNotEmpty() -> profiles.firstOrNull { it.id == before }?.let { switchTo(c, it); true } ?: false
+                    else -> false
+                }
+                prefs.edit().remove(K_AUTO).remove(K_BEFORE).remove(K_SNAP).apply()
+                Diag.note("steam switch: game ended, restored=$restored")
             }
         }
+    }
+
+    /** Puts back the live settings from before the switch, and which profile was active then. */
+    private fun restore(c: Context, snap: NamedProfile, beforeProfile: NamedProfile?) {
+        Log.i(TAG, "restoring the settings from before the Steam game")
+        Prefs.applyNamedProfile(c, snap)
+        Prefs.setActiveNamedProfileId(c, beforeProfile?.id)
+        ControllerService.notifyNamedProfileApplied(c)
+        Pill.show(c, Pill.Kind.PROFILE, beforeProfile?.let { c.getString(R.string.prof_pill, it.name) } ?: c.getString(R.string.steam_restored))
     }
 
     private fun switchTo(c: Context, profile: NamedProfile) {

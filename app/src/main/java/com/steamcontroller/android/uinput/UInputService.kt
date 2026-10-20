@@ -1,10 +1,12 @@
 package com.steamcontroller.android.uinput
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import com.steamcontroller.android.BuildConfig
 import android.util.Log
 import java.io.ByteArrayOutputStream
+import java.io.FileInputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -225,6 +227,20 @@ class UInputService : IUInputService.Stub {
         return runAllowed(cmd)?.takeIf { it.exit == 0 }?.output?.trim()
     }
 
+    override fun installApk(apk: ParcelFileDescriptor?, size: Long): Int {
+        touch()
+        if (apk == null) return -1
+        return try {
+            val cmd = arrayOf("pm", "install", "-r", "-S", size.toString())
+            runAllowed(cmd, stdin = apk, stdinBytes = size)?.exit ?: -1
+        } finally {
+            try {
+                apk.close()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     private class ShellResult(val exit: Int, val output: String)
 
     /**
@@ -233,15 +249,46 @@ class UInputService : IUInputService.Stub {
      * [ShellAllowlist.MAX_OUTPUT_BYTES], and the child is killed after
      * [ShellAllowlist.TIMEOUT_MS] - well inside the liveness watchdog's window.
      */
-    private fun runAllowed(cmd: Array<String>?): ShellResult? {
-        if (cmd == null || !ShellAllowlist.isAllowed(cmd)) {
+    private fun runAllowed(
+        cmd: Array<String>?,
+        stdin: ParcelFileDescriptor? = null,
+        stdinBytes: Long = 0L,
+    ): ShellResult? {
+        if (cmd == null || !ShellAllowlist.isAllowed(cmd, withStdin = stdin != null)) {
             Log.w(TAG, "refused shell command: ${cmd?.joinToString(" ")}")
             return null
         }
         var proc: Process? = null
         return try {
             proc = ProcessBuilder(cmd.toList()).redirectErrorStream(true).start()
-            proc.outputStream.close()
+            val sink = proc.outputStream
+            if (stdin == null) {
+                sink.close()
+            } else {
+                // Exactly [stdinBytes] from the passed descriptor, then EOF.
+                val writer =
+                    Thread({
+                        try {
+                            val input = FileInputStream(stdin.fileDescriptor)
+                            val chunk = ByteArray(64 * 1024)
+                            var left = stdinBytes
+                            while (left > 0) {
+                                val n = input.read(chunk, 0, minOf(chunk.size.toLong(), left).toInt())
+                                if (n < 0) break
+                                sink.write(chunk, 0, n)
+                                left -= n
+                            }
+                        } catch (_: IOException) {
+                        } finally {
+                            try {
+                                sink.close()
+                            } catch (_: IOException) {
+                            }
+                        }
+                    }, "shell-input")
+                writer.isDaemon = true
+                writer.start()
+            }
             val buffer = ByteArrayOutputStream()
             val stream = proc.inputStream
             val reader =

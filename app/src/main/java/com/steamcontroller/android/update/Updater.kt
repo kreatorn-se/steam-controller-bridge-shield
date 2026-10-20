@@ -1,8 +1,14 @@
 package com.steamcontroller.android.update
 
 import android.content.Context
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import com.steamcontroller.android.BuildConfig
 import com.steamcontroller.android.hub.Diag
 import com.steamcontroller.android.service.ControllerService
@@ -10,6 +16,7 @@ import com.steamcontroller.android.uinput.UInputGamepad
 import com.steamcontroller.android.ui.pill.Pill
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -18,18 +25,25 @@ import java.util.concurrent.Executors
 /**
  * Self-update without a PC: the latest GitHub release of this repository, checked at start and
  * then at most every six hours. One press downloads `SteamControllerBridge-v<ver>.apk` into the
- * app's external files dir (the shell user can read it there), checks its SHA-256 against the
- * release's digest when GitHub gives one, and installs it with `pm install -r -t` through the
- * Shizuku shell service (ShellAllowlist allows exactly that, for exactly that folder and name).
+ * app's private files dir and installs it only if all of these hold, checked right before the
+ * install on the very descriptor that is installed:
  *
- * Android refuses an APK signed with another key, so only builds of this same app can install.
- * Before installing, a flag is written; UpdateReceiver (MY_PACKAGE_REPLACED) brings the
- * controller service and the app back when the new version starts.
+ * - the release lists a SHA-256 digest for the asset, and the file matches it (no digest, no
+ *   update);
+ * - the APK's package name is this app's, it is signed with the same certificate as the
+ *   installed app, and its version code is higher.
+ *
+ * The bytes then go to the Shizuku shell service as a file descriptor, which runs exactly
+ * `pm install -r -S <size>` with them on stdin (ShellAllowlist). Nothing is world-readable and
+ * test-only packages are not accepted. Before installing, a flag is written; UpdateReceiver
+ * (MY_PACKAGE_REPLACED) brings the controller service and the app back when the new version
+ * starts.
  */
 object Updater {
     private const val API = "https://api.github.com/repos/kreatorn-se/steam-controller-bridge-shield/releases/latest"
     private const val PREFS = "updater"
     private const val CHECK_EVERY_MS = 6 * 3_600_000L
+    private val SHA256 = Regex("[0-9a-f]{64}")
     private val ASSET = Regex("""SteamControllerBridge-v([0-9.]+)(-[a-z0-9]+)?\.apk""")
 
     data class Release(val version: String, val name: String, val url: String, val size: Long, val sha256: String?)
@@ -39,7 +53,8 @@ object Updater {
         data class Available(val rel: Release) : State()
         data class Downloading(val rel: Release, val progress: Float) : State()
         data class Installing(val rel: Release) : State()
-        data class Failed(val rel: Release?, val message: String) : State()
+        /** [seq] tells one failure from the next, so each is announced once. */
+        data class Failed(val rel: Release?, val message: String, val seq: Long = 0L) : State()
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -138,34 +153,42 @@ object Updater {
         val app = c.applicationContext
         val gamepad = UInputGamepad.active
         if (!ControllerService.isRunning || gamepad == null) {
-            publish(State.Failed(rel, "needs_service"))
+            fail(rel, "needs_service")
             return
         }
         busy = true
         publish(State.Downloading(rel, 0f))
         io.execute {
             try {
-                val dir = File(app.getExternalFilesDir(null), "update").apply { mkdirs() }
-                dir.listFiles()?.forEach { if (it.name != rel.name) it.delete() }
-                val apk = File(dir, rel.name)
-                if (!ASSET.matches(apk.name)) throw IllegalStateException("bad name")
-                download(rel, apk)
-                if (rel.sha256 != null && sha256(apk) != rel.sha256) {
-                    apk.delete()
-                    fail(rel, "checksum")
+                if (rel.sha256 == null || !SHA256.matches(rel.sha256)) {
+                    fail(rel, "no_digest")
                     return@execute
                 }
-                apk.setReadable(true, false)
-                publish(State.Installing(rel))
-                // Come back after the replace: the receiver reads these (UpdateReceiver).
-                p(app).edit().putBoolean("pending", true).putBoolean("service_was_running", ControllerService.isRunning)
-                    .putLong("pending_at", System.currentTimeMillis()).commit()
-                Pill.show(app, Pill.Kind.INFO, "UPDATING · back in a moment")
-                Diag.note("update ${BuildConfig.VERSION_NAME} -> ${rel.version}: installing")
-                val exit = gamepad.runInstall(apk.absolutePath.replace(Regex("^/storage/emulated/\\d+/"), "/storage/emulated/0/"))
-                // Success kills this process before we get here; anything else is a failure.
-                p(app).edit().putBoolean("pending", false).apply()
-                fail(rel, if (exit == -2) "needs_service" else "install_$exit")
+                val dir = File(app.filesDir, "update").apply { mkdirs() }
+                dir.listFiles()?.forEach { if (it.name != rel.name) it.delete() }
+                // Leftovers from 1.4.1, which kept the APK in the shared external dir.
+                app.getExternalFilesDir(null)?.let { File(it, "update").deleteRecursively() }
+                if (!ASSET.matches(rel.name)) throw IllegalStateException("bad name")
+                val apk = File(dir, rel.name)
+                download(rel, apk)
+                ParcelFileDescriptor.open(apk, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                    val size = pfd.statSize
+                    if (rel.size > 0 && size != rel.size) { apk.delete(); fail(rel, "size"); return@execute }
+                    verifyPackage(app, apk)?.let { why -> apk.delete(); fail(rel, why); return@execute }
+                    // Hash the descriptor that is handed over, then rewind it for the shell side.
+                    if (sha256(pfd) != rel.sha256) { apk.delete(); fail(rel, "checksum"); return@execute }
+                    Os.lseek(pfd.fileDescriptor, 0L, OsConstants.SEEK_SET)
+                    publish(State.Installing(rel))
+                    // Come back after the replace: the receiver reads these (UpdateReceiver).
+                    p(app).edit().putBoolean("pending", true).putBoolean("service_was_running", ControllerService.isRunning)
+                        .putLong("pending_at", System.currentTimeMillis()).commit()
+                    Pill.show(app, Pill.Kind.INFO, "UPDATING · back in a moment")
+                    Diag.note("update ${BuildConfig.VERSION_NAME} -> ${rel.version}: installing")
+                    val exit = gamepad.installApk(pfd, size)
+                    // Success kills this process before we get here; anything else is a failure.
+                    p(app).edit().putBoolean("pending", false).apply()
+                    fail(rel, if (exit == -2) "needs_service" else "install_$exit")
+                }
             } catch (t: Throwable) {
                 fail(rel, "download")
                 Diag.error("update download failed: ${t.javaClass.simpleName}")
@@ -175,9 +198,42 @@ object Updater {
         }
     }
 
+    /** Null when [apk] is a newer build of this app with the same signer, else why not. */
+    private fun verifyPackage(c: Context, apk: File): String? {
+        val pm = c.packageManager
+        @Suppress("DEPRECATION")
+        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val theirs = pm.getPackageArchiveInfo(apk.path, flags) ?: return "unreadable"
+        if (theirs.packageName != BuildConfig.APPLICATION_ID || c.packageName != BuildConfig.APPLICATION_ID) return "package"
+        val mine = pm.getPackageInfo(c.packageName, flags)
+        if (versionCode(theirs) <= versionCode(mine)) return "version"
+        val a = signers(theirs)
+        if (a.isEmpty() || a != signers(mine)) return "signer"
+        return null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun versionCode(p: PackageInfo): Long = if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()
+
+    @Suppress("DEPRECATION")
+    private fun signers(p: PackageInfo): Set<String> {
+        val sigs = if (Build.VERSION.SDK_INT >= 28) p.signingInfo?.apkContentsSigners else p.signatures
+        return sigs.orEmpty().map { sig -> hex(MessageDigest.getInstance("SHA-256").digest(sig.toByteArray())) }.toSet()
+    }
+
+    private var failures = 0L
+    private var announced = 0L
+
     private fun fail(rel: Release, why: String) {
         Diag.error("update failed: $why")
-        publish(State.Failed(rel, why))
+        publish(State.Failed(rel, why, synchronized(this) { ++failures }))
+    }
+
+    /** True the first time it is asked about [f]: its pill shows once, not on every re-observe. */
+    @Synchronized fun announce(f: State.Failed): Boolean {
+        if (f.seq <= announced) return false
+        announced = f.seq
+        return true
     }
 
     private fun download(rel: Release, dest: File) {
@@ -211,14 +267,18 @@ object Updater {
         if (!tmp.renameTo(dest)) throw IllegalStateException("rename")
     }
 
-    private fun sha256(f: File): String {
+    /** SHA-256 of everything readable from [pfd]'s current position (left at the end). */
+    private fun sha256(pfd: ParcelFileDescriptor): String {
         val md = MessageDigest.getInstance("SHA-256")
-        f.inputStream().use { input ->
-            val buf = ByteArray(64 * 1024)
-            while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) }
-        }
-        return md.digest().joinToString("") { String.format("%02x", it.toInt() and 0xFF) }
+        Os.lseek(pfd.fileDescriptor, 0L, OsConstants.SEEK_SET)
+        // Not closed: closing a stream made from a FileDescriptor must not close the descriptor.
+        val input = FileInputStream(pfd.fileDescriptor)
+        val buf = ByteArray(64 * 1024)
+        while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) }
+        return hex(md.digest())
     }
+
+    private fun hex(b: ByteArray) = b.joinToString("") { String.format("%02x", it.toInt() and 0xFF) }
 
     /** For UpdateReceiver: whether this start follows our own install, and if the service ran. */
     fun consumePending(c: Context): Pair<Boolean, Boolean> {

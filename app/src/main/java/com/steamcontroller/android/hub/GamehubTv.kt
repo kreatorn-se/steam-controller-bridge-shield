@@ -118,7 +118,8 @@ object GamehubTv {
 
     data class Saver(val collection: String, val intervalSec: Int, val shuffle: Boolean)
 
-    enum class Fail { NOT_LINKED, NOT_DEPLOYED, UNAUTHORIZED, OFFLINE, SERVER }
+    /** [GONE]: a write's target (shot, album, game) is not there any more; refresh and retry. */
+    enum class Fail { NOT_LINKED, NOT_DEPLOYED, UNAUTHORIZED, OFFLINE, SERVER, GONE }
 
     sealed class Res<out T> {
         data class Ok<T>(val value: T) : Res<T>()
@@ -204,13 +205,13 @@ object GamehubTv {
 
     /** [shotId] null goes back to the official hero art. */
     fun setBackground(c: Context, game: String, shotId: String?): Res<Unit> {
-        val r = send(c, "POST", "/api/device/v1/games/" + seg(game) + "/background", JSONObject().put("shotId", shotId ?: JSONObject.NULL).toString(), newEndpoint = true)
+        val r = send(c, "POST", "/api/device/v1/games/" + seg(game) + "/background", JSONObject().put("shotId", shotId ?: JSONObject.NULL).toString())
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
     /** Returns the new album's id. */
     fun createAlbum(c: Context, name: String): Res<String> {
-        val r = send(c, "POST", "/api/device/v1/albums", JSONObject().put("name", name).toString(), newEndpoint = true)
+        val r = send(c, "POST", "/api/device/v1/albums", JSONObject().put("name", name).toString())
         if (r !is Res.Ok) return r as Res.Err
         val o = runCatching { JSONObject(r.value) }.getOrNull()
         val id = o?.let { str(it, "id") ?: it.optJSONObject("album")?.let { a -> str(a, "id") } } ?: return Res.Err(Fail.SERVER, "no album id")
@@ -218,14 +219,14 @@ object GamehubTv {
     }
 
     fun addToAlbum(c: Context, albumId: String, shotIds: List<String>): Res<Unit> {
-        val r = send(c, "POST", "/api/device/v1/albums/" + seg(albumId) + "/shots", JSONObject().put("add", JSONArray(shotIds)).toString(), newEndpoint = true)
+        val r = send(c, "POST", "/api/device/v1/albums/" + seg(albumId) + "/shots", JSONObject().put("add", JSONArray(shotIds)).toString())
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
     /** Tags by person id (from /people); returns the updated capture when the hub sends it. */
     fun setPeople(c: Context, shotId: String, add: List<String>, remove: List<String>): Res<Shot?> {
         val body = JSONObject().put("add", JSONArray(add)).put("remove", JSONArray(remove))
-        val r = send(c, "POST", "/api/device/v1/shots/" + seg(shotId) + "/people", body.toString(), newEndpoint = true)
+        val r = send(c, "POST", "/api/device/v1/shots/" + seg(shotId) + "/people", body.toString())
         if (r !is Res.Ok) return r as Res.Err
         return Res.Ok(runCatching { shotOf(JSONObject(r.value)) }.getOrNull())
     }
@@ -292,7 +293,7 @@ object GamehubTv {
     }
 
     fun postDiag(c: Context, json: String): Res<Unit> {
-        val r = send(c, "POST", "/api/device/v1/diag", json, newEndpoint = true)
+        val r = send(c, "POST", "/api/device/v1/diag", json, routeOnly = true)
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
@@ -585,8 +586,13 @@ object GamehubTv {
 
     private fun get(c: Context, path: String): Res<String> = send(c, "GET", path, null)
 
-    /** [newEndpoint]: a 404 on a write means the hub does not have this call yet (update Gamehub). */
-    private fun send(c: Context, method: String, path: String, json: String?, newEndpoint: Boolean = false): Res<String> {
+    /**
+     * A 404 on a GET (a probe of the read API) means the hub does not have that call yet. A 404 on
+     * a write normally means its target is gone (a shot skipped elsewhere, an album deleted):
+     * [Fail.GONE], never "update Gamehub". [routeOnly]: a write with no target in its path, so its
+     * 404 can only mean the route is missing.
+     */
+    private fun send(c: Context, method: String, path: String, json: String?, routeOnly: Boolean = false): Res<String> {
         if (GamehubStore.token(c) == null) return Res.Err(Fail.NOT_LINKED, "not linked")
         return try {
             val conn = open(c, method, base(c) + path) ?: return Res.Err(Fail.NOT_LINKED, "not linked")
@@ -606,7 +612,8 @@ object GamehubTv {
                     status in 200..299 -> Res.Ok(text)
                     // A 404 on the read API means a hub from before the TV app; a redirect means
                     // Cloudflare Access is not letting /api/device/v1 through yet. Both: update Gamehub.
-                    status == 404 && (method == "GET" || newEndpoint) -> Res.Err(Fail.NOT_DEPLOYED, "HTTP 404")
+                    status == 404 && (method == "GET" || routeOnly) -> Res.Err(Fail.NOT_DEPLOYED, "HTTP 404")
+                    status == 404 -> Res.Err(Fail.GONE, "HTTP 404")
                     status in 300..399 -> Res.Err(Fail.NOT_DEPLOYED, "HTTP $status (Access)")
                     status == 401 -> { onUnauthorized(c); Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status") }
                     status == 403 -> Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status")

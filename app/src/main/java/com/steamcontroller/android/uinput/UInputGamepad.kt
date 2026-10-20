@@ -103,13 +103,14 @@ class UInputGamepad(
         private set
 
     /**
-     * Runs `pm install -r -t <apk>` through the shell-uid service (ShellAllowlist checks the exact
-     * shape and path). Blocks for up to four minutes: call off the main thread. -2 when the shell
-     * service is not connected, -1 on refusal or failure, else the exit code.
+     * Self-update: the shell-uid service runs `pm install -r -S <size>` and feeds it [apk] on
+     * stdin (ShellAllowlist checks the exact shape). The caller verifies the APK first. Blocks for
+     * up to four minutes: call off the main thread. -2 when the shell service is not connected,
+     * -1 on refusal or failure, else pm's exit code.
      */
-    fun runInstall(apkPath: String): Int {
+    fun installApk(apk: android.os.ParcelFileDescriptor, size: Long): Int {
         val svc = service ?: return -2
-        return try { svc.runShellCommand(arrayOf("pm", "install", "-r", "-t", apkPath)) } catch (_: Throwable) { -1 }
+        return try { svc.installApk(apk, size) } catch (_: Throwable) { -1 }
     }
 
     /** Set by ControllerService to receive rumble commands from games. (strong, weak) ∈ [0, 65535]. */

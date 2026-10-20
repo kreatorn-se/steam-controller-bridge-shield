@@ -153,18 +153,69 @@ class MainActivity : AppCompatActivity(), Host {
         }
     }
 
-    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
-        if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) {
-            // Only deliberate movement counts as activity, not sensor noise from an idle pad.
-            if (kotlin.math.abs(ev.getAxisValue(MotionEvent.AXIS_X)) > 0.4f || kotlin.math.abs(ev.getAxisValue(MotionEvent.AXIS_Y)) > 0.4f ||
-                ev.getAxisValue(MotionEvent.AXIS_HAT_X) != 0f || ev.getAxisValue(MotionEvent.AXIS_HAT_Y) != 0f ||
-                ev.getAxisValue(MotionEvent.AXIS_LTRIGGER) > 0.4f || ev.getAxisValue(MotionEvent.AXIS_RTRIGGER) > 0.4f) {
-                lastInput = android.os.SystemClock.uptimeMillis()
+    /** Any key, touch or trackball input the window gets (Activity calls this before dispatch). */
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        lastInput = android.os.SystemClock.uptimeMillis()
+    }
+
+    // Set when a stick or trigger woke the screensaver: its motion is swallowed until it is back
+    // at rest, so the same push does not also move focus on the page underneath.
+    private var wakeMotion = false
+    private var wakeTouch = false
+
+    /** A stick, trigger or D-pad push, not the drift of a pad at rest. */
+    private fun deliberate(ev: MotionEvent): Boolean {
+        fun a(axis: Int) = kotlin.math.abs(ev.getAxisValue(axis))
+        return a(MotionEvent.AXIS_X) > 0.4f || a(MotionEvent.AXIS_Y) > 0.4f || a(MotionEvent.AXIS_Z) > 0.4f || a(MotionEvent.AXIS_RZ) > 0.4f ||
+            ev.getAxisValue(MotionEvent.AXIS_HAT_X) != 0f || ev.getAxisValue(MotionEvent.AXIS_HAT_Y) != 0f ||
+            a(MotionEvent.AXIS_LTRIGGER) > 0.4f || a(MotionEvent.AXIS_RTRIGGER) > 0.4f || a(MotionEvent.AXIS_BRAKE) > 0.4f || a(MotionEvent.AXIS_GAS) > 0.4f
+    }
+
+    private fun atRest(ev: MotionEvent): Boolean {
+        fun a(axis: Int) = kotlin.math.abs(ev.getAxisValue(axis))
+        return a(MotionEvent.AXIS_X) < 0.25f && a(MotionEvent.AXIS_Y) < 0.25f && a(MotionEvent.AXIS_Z) < 0.25f && a(MotionEvent.AXIS_RZ) < 0.25f &&
+            ev.getAxisValue(MotionEvent.AXIS_HAT_X) == 0f && ev.getAxisValue(MotionEvent.AXIS_HAT_Y) == 0f &&
+            a(MotionEvent.AXIS_LTRIGGER) < 0.2f && a(MotionEvent.AXIS_RTRIGGER) < 0.2f && a(MotionEvent.AXIS_BRAKE) < 0.2f && a(MotionEvent.AXIS_GAS) < 0.2f
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        lastInput = android.os.SystemClock.uptimeMillis()
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && show?.isCalm == true) wakeTouch = true
+        if (wakeTouch) {
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                wakeTouch = false
+                show?.takeIf { it.isCalm }?.close()
             }
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        val joyMove = ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE
+        // Mouse and touchpad movement (hover, scroll) counts as activity too.
+        val pointer = ev.isFromSource(InputDevice.SOURCE_CLASS_POINTER) || ev.isFromSource(InputDevice.SOURCE_MOUSE)
+        val push = joyMove && deliberate(ev)
+        if (pointer || push) lastInput = now
+        if (joyMove && wakeMotion) {
+            if (atRest(ev)) wakeMotion = false
+            hatX = ev.getAxisValue(MotionEvent.AXIS_HAT_X); hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
+            return true
+        }
+        // The screensaver closes on a deliberate push (or the mouse), and that input stops here.
+        if ((push || (pointer && ev.actionMasked != MotionEvent.ACTION_HOVER_EXIT)) && show?.isCalm == true) {
+            show?.close()
+            if (joyMove) {
+                wakeMotion = !atRest(ev)
+                hatX = ev.getAxisValue(MotionEvent.AXIS_HAT_X); hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
+            }
+            return true
         }
         // Show mode reads the triggers (LT/RT: previous/next collection); nothing else changes.
-        if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) show?.onMotion(ev)
-        if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) {
+        if (joyMove) show?.onMotion(ev)
+        if (joyMove) {
             val hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X)
             val hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
             val hatChanged = hx != hatX || hy != hatY
@@ -449,7 +500,7 @@ class MainActivity : AppCompatActivity(), Host {
             is com.steamcontroller.android.update.Updater.State.Failed -> {
                 updateChip.label.text = getString(R.string.update_retry)
                 updateBar.visibility = View.GONE
-                Pill.show(this, Pill.Kind.FAILED, updateFailure(st.message))
+                if (com.steamcontroller.android.update.Updater.announce(st)) Pill.show(this, Pill.Kind.FAILED, updateFailure(st.message))
             }
         }
         updateChip.visibility = View.VISIBLE
@@ -457,7 +508,10 @@ class MainActivity : AppCompatActivity(), Host {
 
     fun updateFailure(why: String): String = when {
         why == "needs_service" -> getString(R.string.update_needs_service)
-        why == "checksum" -> getString(R.string.update_checksum)
+        why == "checksum" || why == "size" || why == "unreadable" -> getString(R.string.update_checksum)
+        why == "no_digest" -> getString(R.string.update_no_digest)
+        why == "signer" || why == "package" -> getString(R.string.update_signer)
+        why == "version" -> getString(R.string.update_not_newer)
         why.startsWith("install") -> getString(R.string.update_install_failed)
         else -> getString(R.string.update_download_failed)
     }

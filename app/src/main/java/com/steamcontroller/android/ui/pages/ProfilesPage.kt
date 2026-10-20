@@ -194,7 +194,12 @@ class ProfilesPage(host: Host) : Page(host) {
         refocus?.requestFocus()
 
         usageRow.removeAllViews()
-        usageRow.addView(Kit.body(ctx, ctx.getString(R.string.prof_now_playing_note), 13f, C.text3), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (list.any { it.boundPackages.isNotEmpty() } && !UsageStatsHelper.hasPermission(ctx)) {
+            usageRow.addView(Kit.body(ctx, ctx.getString(R.string.prof_usage_needed), 13f, C.warning), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            usageRow.addView(Kit.button(ctx, ctx.getString(R.string.prof_usage_open)) { UsageStatsHelper.openSettingsScreen(ctx) })
+        } else {
+            usageRow.addView(Kit.body(ctx, ctx.getString(R.string.prof_now_playing_note), 13f, C.text3), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
     }
 
     private fun card(p: NamedProfile, active: Boolean): View {
@@ -218,8 +223,27 @@ class ProfilesPage(host: Host) : Page(host) {
         card.addView(View(ctx), LinearLayout.LayoutParams(1, 0, 1f))
         // The Steam games this profile follows (see actions()).
         if (p.steamAppIds.isNotEmpty()) card.addView(Kit.label(ctx, ctx.resources.getQuantityString(R.plurals.steam_games, p.steamAppIds.size, p.steamAppIds.size), 10.5f, C.accent))
+        // Apps it follows (RetroArch, Moonlight...): still switched by the service, shown read-only;
+        // new ones are not bound from here any more, existing ones can be removed in actions().
+        if (p.boundPackages.isNotEmpty()) {
+            val apps = Kit.row(ctx)
+            for (pkg in p.boundPackages.take(5)) {
+                val iv = ImageView(ctx)
+                apps.addView(iv, LinearLayout.LayoutParams(ctx.dp(20), ctx.dp(20)).apply { marginEnd = ctx.dp(6) })
+                loadIcon(pkg, iv)
+            }
+            val more = if (p.boundPackages.size > 5) "+${p.boundPackages.size - 5} · " else ""
+            apps.addView(Kit.label(ctx, more + ctx.resources.getQuantityString(R.plurals.prof_apps, p.boundPackages.size, p.boundPackages.size), 10.5f, C.text2))
+            card.addView(apps, Kit.lp(t = 4, ctx = ctx))
+        }
         card.setOnFocusChangeListenerChained { has -> name.setTextColor(if (has) C.text else C.text) }
         return card
+    }
+
+    private fun appLabel(pkg: String): String = try {
+        ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (_: Throwable) {
+        pkg
     }
 
     private fun loadIcon(pkg: String, into: ImageView) {
@@ -244,14 +268,25 @@ class ProfilesPage(host: Host) : Page(host) {
             Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.prof_updated, p.name))
             render()
         })
-        // "Bind to apps" is gone: on the Shield everything runs inside GeForce NOW, so the
-        // foreground app never tells games apart. Profiles follow Steam games instead
-        // (NamedProfile.steamAppIds, applied by hub/SteamSwitch); app bindings stay in the data.
+        // "Bind to apps" is gone: inside GeForce NOW the foreground app never tells games apart, so
+        // profiles follow Steam games instead (NamedProfile.steamAppIds, hub/SteamSwitch). Apps
+        // bound before keep switching (ControllerService); they are listed below to remove.
         sheet.body.addView(ListRow(ctx, ctx.getString(R.string.steam_bind),
             if (p.steamAppIds.isEmpty()) ctx.getString(R.string.steam_bind_none_yet) else ctx.resources.getQuantityString(R.plurals.steam_games, p.steamAppIds.size, p.steamAppIds.size)) {
             host.closeSheet()
             com.steamcontroller.android.ui.tv.SteamPicker.open(host, p.id) { render() }
         })
+        for (pkg in p.boundPackages) {
+            sheet.body.addView(ListRow(ctx, appLabel(pkg), ctx.getString(R.string.prof_app_bound_hint)) {
+                host.closeSheet()
+                val fresh = Prefs.listNamedProfiles(ctx).firstOrNull { it.id == p.id }
+                if (fresh != null) {
+                    Prefs.saveNamedProfile(ctx, fresh.copy(boundPackages = fresh.boundPackages - pkg))
+                    Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.prof_app_removed, appLabel(pkg)))
+                    render()
+                }
+            })
+        }
         sheet.body.addView(ListRow(ctx, ctx.getString(R.string.prof_rename), null) {
             host.closeSheet()
             ProfileOps.promptName(ctx, ctx.getString(R.string.prof_rename), p.name) { n -> Prefs.saveNamedProfile(ctx, p.copy(name = n)); host.refreshAll() }
