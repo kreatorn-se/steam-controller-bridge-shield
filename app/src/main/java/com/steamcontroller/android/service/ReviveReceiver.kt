@@ -24,7 +24,11 @@ class ReviveReceiver : BroadcastReceiver() {
             return
         }
         try {
-            context.startForegroundService(Intent(context, ControllerService::class.java))
+            context.startForegroundService(
+                Intent(context, ControllerService::class.java)
+                    // The pad never went away; don't announce the link as if it were new.
+                    .putExtra(ControllerService.EXTRA_REVIVED, true),
+            )
             Log.i(TAG, "revived the controller service")
         } catch (t: Throwable) {
             Log.w(TAG, "revive failed: ${t.message}")

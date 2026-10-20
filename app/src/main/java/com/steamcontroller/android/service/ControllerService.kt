@@ -1,22 +1,34 @@
 package com.steamcontroller.android.service
 
 import android.app.*
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import com.steamcontroller.android.BuildConfig
 import com.steamcontroller.android.Prefs
 import com.steamcontroller.android.R
 import com.steamcontroller.android.Transport
 import com.steamcontroller.android.bt.BluetoothHidManager
 import com.steamcontroller.android.input.GamepadMapper
+import com.steamcontroller.android.input.ProfileSwitcher
 import com.steamcontroller.android.input.ShizukuInputInjector
+import com.steamcontroller.android.live.ControllerLive
 import com.steamcontroller.android.parser.Buttons
 import com.steamcontroller.android.parser.SteamControllerState
+import com.steamcontroller.android.parser.BatteryStatus
 import com.steamcontroller.android.parser.SteamReportParser
+import com.steamcontroller.android.ui.pill.Pill
 import com.steamcontroller.android.uinput.UInputGamepad
 import com.steamcontroller.android.uinput.UInputNative
 import com.steamcontroller.android.usb.HidReportReader
@@ -26,7 +38,14 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import rikka.shizuku.Shizuku
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ControllerService : Service() {
     enum class InjectionMode {
@@ -73,10 +92,27 @@ class ControllerService : Service() {
         const val ACTION_STOP = "com.steamcontroller.android.STOP"
         const val ACTION_RESTART = "com.steamcontroller.android.RESTART"
         const val ACTION_RECONNECT = "com.steamcontroller.android.RECONNECT"
+        /** Notification action: toggle the emulated device (gamepad <-> desktop). */
         const val ACTION_NEXT_PROFILE = "com.steamcontroller.android.NEXT_PROFILE"
+
+        /** Step through the saved Game Profiles (same as the Steam + D-pad chord). */
+        const val ACTION_NEXT_NAMED_PROFILE = "com.steamcontroller.android.NEXT_NAMED_PROFILE"
+        const val ACTION_PREV_NAMED_PROFILE = "com.steamcontroller.android.PREV_NAMED_PROFILE"
+
+        /** A named profile was just written to the prefs: live-apply what needs the service. */
+        private const val ACTION_NAMED_PROFILE_APPLIED = "com.steamcontroller.android.NAMED_PROFILE_APPLIED"
+
+        /** Set by ReviveReceiver: the process was killed and restarted, the pad never went away. */
+        const val EXTRA_REVIVED = "revived"
+        private const val ACTION_USB_PERMISSION = "com.steamcontroller.android.SERVICE_USB_PERMISSION"
         const val ACTION_TEST_RUMBLE = "com.steamcontroller.android.TEST_RUMBLE"
         private const val TEST_RUMBLE_DURATION_MS = 5000L
         private const val UNBIND_TIMEOUT_MS = 2000L
+
+        private const val REPORT_STATE_USB = 0x42
+        private const val REPORT_STATE_BLE = 0x45
+        private const val REPORT_WIRELESS = 0x79
+        private const val REPORT_WIRELESS_X = 0x46
 
         @Volatile
         var isRunning = false
@@ -87,6 +123,59 @@ class ControllerService : Service() {
 
         /** No frames for this long means the link is not actually delivering. */
         private const val FRAME_STALE_MS = 3000L
+
+        /** Link supervisor period: stale detection, re-init of a silent controller, USB re-attach. */
+        private const val SUPERVISE_MS = 1000L
+
+        /** After a reconnect request, say so if no controller has spoken by then. */
+        private const val RECONNECT_OUTCOME_MS = 6000L
+
+        /** A silent puck slot / cable is re-initialised this often (then backs off). */
+        private const val KICK_FAST_MS = 3000L
+        private const val KICK_SLOW_MS = 10_000L
+        private const val KICKS_BEFORE_SLOW = 10
+
+        /** Silent this long on one USB device while another is attached: try the other one. */
+        private const val SWITCH_DEVICE_AFTER_MS = 8000L
+
+        /** Low-battery pills, once per connection each. */
+        private const val BATTERY_LOW_PERCENT = 15
+        private const val BATTERY_CRITICAL_PERCENT = 5
+
+        /**
+         * Full re-initialisation of the controller link without stopping the service: re-sends
+         * the controller setup, re-opens the USB device (or rebuilds the Bluetooth link) and
+         * recreates the virtual pad if it went away. Starts the service if it is not running.
+         * Shows the RECONNECTING pill, then CONNECTED or why not. Callable from any thread.
+         */
+        fun requestReconnect(context: Context) {
+            val app = context.applicationContext
+            val intent = Intent(app, ControllerService::class.java)
+            if (isRunning) {
+                intent.action = ACTION_RECONNECT
+            } else {
+                // The user asked for a working controller; a deliberate earlier Stop is overridden.
+                Prefs.setUserStoppedService(app, false)
+                Pill.show(app, Pill.Kind.RECONNECTING, "RECONNECTING")
+            }
+            try {
+                app.startForegroundService(intent)
+            } catch (t: Throwable) {
+                Log.w(TAG, "requestReconnect: ${t.message}")
+                Pill.show(app, Pill.Kind.FAILED, "RECONNECT FAILED")
+            }
+        }
+
+        /** Tell a running service that Prefs now hold a different named profile (ProfileSwitcher). */
+        fun notifyNamedProfileApplied(context: Context) {
+            if (!isRunning) return
+            val app = context.applicationContext
+            try {
+                app.startService(Intent(app, ControllerService::class.java).setAction(ACTION_NAMED_PROFILE_APPLIED))
+            } catch (t: Throwable) {
+                Log.w(TAG, "notifyNamedProfileApplied: ${t.message}")
+            }
+        }
 
         // Observed by DebugActivity / MainActivity for live display
         private val _stateFlow = MutableStateFlow<SteamControllerState?>(null)
@@ -119,13 +208,13 @@ class ControllerService : Service() {
     private lateinit var btManager: BluetoothHidManager
     private val legacyInjector = ShizukuInputInjector()
     private lateinit var uinput: UInputGamepad
-    private var mode: InjectionMode = InjectionMode.NONE
+    @Volatile private var mode: InjectionMode = InjectionMode.NONE
 
     // Guards against a duplicate start re-initializing on top of a live connection: a second GATT
     // client against a controller that accepts one makes the handshake stall at the first
     // subscription, which presents as "the controller went unresponsive".
-    private var initializing = false
-    private var initializedTransport: Transport? = null
+    @Volatile private var initializing = false
+    @Volatile private var initializedTransport: Transport? = null
 
     // Link health. `lastFrameAt` is the only honest signal that the controller is actually there;
     // `btConnected` is what the Bluetooth stack thinks, which can be true on a link that is
@@ -146,6 +235,33 @@ class ControllerService : Service() {
 
     @Volatile private var activeUsbInterfaceId: Int? = null
     private val configuredUsbInterfaces = mutableSetOf<Int>()
+
+    // ── Link supervision (controller power cycle, puck/cable unplug and replug) ──────────────
+    // True while the controller itself is talking to us. Flipped by frames (online) and by a
+    // wireless-disconnect report, frame silence or a detach (offline); each flip shows a pill.
+    private val controllerOnline = AtomicBoolean(false)
+
+    @Volatile private var offlineSince = 0L
+
+    // Serialises everything that opens/closes the USB device (supervisor, attach/detach, reconnect).
+    private val usbMutex = Mutex()
+    private val usbPermissionRequested = mutableSetOf<String>()
+    private var lastKickAt = 0L
+    private var kickCount = 0
+    private var lastUsbScanAt = 0L
+    private var lastDeviceSwitchAt = 0L
+    private var reconnectJob: Job? = null
+    private var outcomeJob: Job? = null
+
+    // A revived service re-attaches to a pad that never went away: no "connected" pill for that.
+    @Volatile private var quietLinkUntil = 0L
+
+    @Volatile private var batteryLowWarned = false
+
+    @Volatile private var batteryCriticalWarned = false
+
+    @Volatile private var publishedProfileKey: String? = null
+    private var superviseTicks = 0
 
     private class PadHapticState {
         var touching = false
@@ -219,6 +335,9 @@ class ControllerService : Service() {
         createNotificationChannel()
         _serviceStateFlow.value =
             _serviceStateFlow.value.copy(profileId = Prefs.getProfile(this).id)
+        ControllerLive.update { it.copy(serviceRunning = true, shizukuReady = shizukuRunning()) }
+        publishActiveProfile(force = true)
+        registerUsbReceiver()
 
         // Refresh the foreground notification whenever the controller's battery level changes.
         // StateFlow only emits on actual value changes, so this triggers ~once per percent dropped.
@@ -234,6 +353,21 @@ class ControllerService : Service() {
             while (isActive) {
                 refreshLinkStatus()
                 delay(LINK_POLL_MS)
+            }
+        }
+
+        // Link supervisor: notices a controller that went quiet, re-initialises one that came
+        // back without talking (fresh from a power cycle, still in lizard mode), and re-opens
+        // the puck or cable after it was unplugged and plugged back in. Blocking USB control
+        // transfers, so it gets an IO thread of its own.
+        scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    superviseLink()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "link supervisor: ${t.message}")
+                }
+                delay(SUPERVISE_MS)
             }
         }
     }
@@ -395,48 +529,80 @@ class ControllerService : Service() {
         )
         Prefs.applyNamedProfile(this, bound)
         announceProfileLoaded(bound.name)
+        publishActiveProfile(force = true)
+        syncGamepadProfile()
+    }
 
-        // Live-swap the gamepad profile (only meaningful for a virtual device).
-        if (mode.isVirtualDevice && !profileSwitchInFlight) {
-            profileSwitchInFlight = true
-            scope.launch {
-                try {
-                    val gp =
-                        com.steamcontroller.android.uinput.GamepadProfile
-                            .fromId(bound.profileId)
-                    uinput.switchProfile(gp)
-                    _serviceStateFlow.value =
-                        _serviceStateFlow.value.copy(profileId = bound.profileId)
-                    refreshNotification()
-                } finally {
-                    profileSwitchInFlight = false
-                }
-            }
-        } else {
-            _serviceStateFlow.value = _serviceStateFlow.value.copy(profileId = bound.profileId)
+    // Set when a profile change arrives while a device swap is still running, so the swap loop
+    // picks up the newest choice instead of dropping it.
+    @Volatile private var profileResyncWanted = false
+
+    /**
+     * Bring the virtual device in line with Prefs.getProfile: recreate it only when the emulated
+     * device actually changes (gamepad <-> desktop). Two Game Profiles that both emulate the
+     * Xbox pad switch without the pad ever disappearing from under the game.
+     */
+    private fun syncGamepadProfile() {
+        if (!mode.isVirtualDevice) {
+            _serviceStateFlow.value = _serviceStateFlow.value.copy(profileId = Prefs.getProfile(this).id)
             refreshNotification()
+            return
+        }
+        if (profileSwitchInFlight) {
+            profileResyncWanted = true
+            return
+        }
+        profileSwitchInFlight = true
+        scope.launch {
+            try {
+                do {
+                    profileResyncWanted = false
+                    val gp = Prefs.getProfile(this@ControllerService)
+                    if (_serviceStateFlow.value.profileId != gp.id) {
+                        confirmedState = null
+                        if (uinput.switchProfile(gp)) {
+                            _serviceStateFlow.value = _serviceStateFlow.value.copy(profileId = gp.id)
+                        } else {
+                            Log.w(TAG, "switchProfile(${gp.displayName}) failed")
+                        }
+                    }
+                } while (profileResyncWanted)
+                refreshNotification()
+            } finally {
+                profileSwitchInFlight = false
+            }
+        }
+    }
+
+    /** ProfileSwitcher (chord or UI) wrote a named profile to the prefs. */
+    private fun onNamedProfileApplied() {
+        publishActiveProfile(force = true)
+        syncGamepadProfile()
+    }
+
+    /** Active named profile into ControllerLive; cheap unless it changed (or [force]). */
+    private fun publishActiveProfile(force: Boolean = false) {
+        val id = Prefs.getActiveNamedProfileId(this)
+        val key = id ?: ""
+        if (!force && key == publishedProfileKey) return
+        publishedProfileKey = key
+        val name = id?.let { pid -> Prefs.listNamedProfiles(this).firstOrNull { it.id == pid }?.name }
+        val snap = ControllerLive.snapshot.value
+        if (snap.activeProfileId != id || snap.activeProfileName != name) {
+            ControllerLive.update { it.copy(activeProfileId = id, activeProfileName = name) }
         }
     }
 
     /**
      * Surface the auto-switch to the user via:
-     *  1. A LENGTH_LONG Toast on the main thread (cheapest signal, shows over the
-     *     launching app - might be missed if the user is head-down, hence #2).
+     *  1. The status pill (above whatever app just came to the front).
      *  2. The foreground-service notification text gets the profile name appended
      *     (persistent until the next swap), so the user can always pull the shade
      *     to confirm which preset is live.
      */
     private fun announceProfileLoaded(profileName: String) {
         Log.i(TAG, "announceProfileLoaded: $profileName")
-        val handler = android.os.Handler(android.os.Looper.getMainLooper())
-        handler.post {
-            android.widget.Toast
-                .makeText(
-                    applicationContext,
-                    "Game Profile loaded: $profileName",
-                    android.widget.Toast.LENGTH_LONG,
-                ).show()
-        }
+        Pill.show(this, Pill.Kind.PROFILE, "PROFILE · $profileName")
         // Notification refresh happens via refreshNotification() in the caller
         // after the service state's profileId is updated.
     }
@@ -526,43 +692,55 @@ class ControllerService : Service() {
         if (intent?.action == ACTION_STOP || intent?.action == ACTION_RESTART) {
             // Only an explicit Stop disarms controller-connect auto-start. Reconnect and internal
             // failures must stay armed so a failed retry does not disable future auto-starts.
-            if (intent.action == ACTION_STOP) Prefs.setUserStoppedService(this, true)
+            if (intent.action == ACTION_STOP) {
+                Prefs.setUserStoppedService(this, true)
+                Pill.show(this, Pill.Kind.DISCONNECTED, "BRIDGE STOPPED")
+            }
             stopSelf()
             return START_NOT_STICKY
         }
 
-        if (intent?.action == ACTION_NEXT_PROFILE) {
-            cycleProfile()
-            return START_STICKY
-        }
-
-        if (intent?.action == ACTION_TEST_RUMBLE) {
-            testRumble()
-            return START_STICKY
-        }
-
-        if (intent?.action == ACTION_RECONNECT && initializedTransport == Transport.BLUETOOTH) {
-            btManager.reconnect()
-            return START_STICKY
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
-        }
-
-        val device =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent?.getParcelableExtra(EXTRA_DEVICE, UsbDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent?.getParcelableExtra(EXTRA_DEVICE)
+        when (intent?.action) {
+            ACTION_NEXT_PROFILE -> {
+                cycleProfile()
+                return START_STICKY
             }
+
+            ACTION_NEXT_NAMED_PROFILE, ACTION_PREV_NAMED_PROFILE -> {
+                ProfileSwitcher.cycle(this, if (intent.action == ACTION_NEXT_NAMED_PROFILE) 1 else -1)
+                return START_STICKY
+            }
+
+            ACTION_NAMED_PROFILE_APPLIED -> {
+                onNamedProfileApplied()
+                return START_STICKY
+            }
+
+            ACTION_TEST_RUMBLE -> {
+                testRumble()
+                return START_STICKY
+            }
+        }
+
+        // Every remaining path may have come in through startForegroundService.
+        startForegroundCompat()
+
+        if (intent?.action == ACTION_RECONNECT) {
+            if (initializing) return START_STICKY
+            if (mode != InjectionMode.NONE || initializedTransport != null) {
+                fullReconnect()
+                return START_STICKY
+            }
+            // Nothing initialised yet: a reconnect is simply a start.
+            Pill.show(this, Pill.Kind.RECONNECTING, "RECONNECTING")
+            armOutcomePill()
+        }
+
+        if (intent?.getBooleanExtra(EXTRA_REVIVED, false) == true) {
+            quietLinkUntil = SystemClock.uptimeMillis() + 20_000L
+        }
+
+        val device = intent?.let { IntentCompat.getParcelableExtra(it, EXTRA_DEVICE, UsbDevice::class.java) }
 
         // A duplicate start must be a no-op - see the fields above. A start for a *different*
         // transport is a deliberate restart (the UI tells the user to restart to apply a transport
@@ -571,6 +749,16 @@ class ControllerService : Service() {
         if (initializing ||
             (mode != InjectionMode.NONE && initializedTransport == requestedTransport)
         ) {
+            // ...except a start that names a USB device other than the one open, or arrives while
+            // the controller is silent: that is a replugged puck or a cable, and used to be
+            // ignored, leaving the bridge reading a device that no longer existed.
+            if (!initializing && requestedTransport == Transport.USB && device != null &&
+                UsbConnectionManager.isSupportedDevice(device) &&
+                (usbManager.device?.deviceName != device.deviceName || !controllerOnline.get())
+            ) {
+                scope.launch(Dispatchers.IO) { reinitUsb(device, "start with ${device.deviceName}") }
+                return START_STICKY
+            }
             Log.i(
                 TAG,
                 "Ignoring duplicate start (initializing=$initializing, mode=$mode, " +
@@ -586,6 +774,18 @@ class ControllerService : Service() {
         return START_STICKY
     }
 
+    private fun startForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
+    }
+
     private suspend fun initialize(device: UsbDevice?) {
         val transport = Prefs.getTransport(this@ControllerService)
         Log.i(TAG, "Initializing with transport=$transport")
@@ -598,6 +798,11 @@ class ControllerService : Service() {
             }
         if (!ok) {
             Log.e(TAG, "Transport init failed, stopping service")
+            Pill.show(
+                this,
+                Pill.Kind.FAILED,
+                if (transport == Transport.USB) "NO STEAM CONTROLLER FOUND" else "BLUETOOTH CONTROLLER NOT FOUND",
+            )
             initializing = false
             initializedTransport = null
             stopSelf()
@@ -605,23 +810,26 @@ class ControllerService : Service() {
         }
         initializing = false
         initializedTransport = transport
+        publishLive()
         if (transport == Transport.BLUETOOTH) acquireWakeLock()
         val message = "controller running transport=$transport mode=$mode"
         Log.i(TAG, message)
         Diagnostics.record(TAG, message)
     }
 
-    private suspend fun initUsb(device: UsbDevice?): Boolean {
-        val dev = device ?: usbManager.findSteamController()
+    private fun initUsb(device: UsbDevice?): Boolean {
+        val candidates = usbManager.findSteamControllers()
+        val dev = device ?: candidates.firstOrNull { usbManager.hasPermission(it) } ?: candidates.firstOrNull()
         if (dev == null) {
             Log.e(TAG, "No Steam Controller found over USB")
             return false
         }
         if (!usbManager.connect(dev)) {
             Log.e(TAG, "Failed to connect USB device")
+            if (!usbManager.hasPermission(dev)) requestUsbPermission(dev)
             return false
         }
-        val conn = usbManager.connection!!
+        val conn = usbManager.connection ?: return false
         val pipes = usbManager.inputPipes
 
         reader =
@@ -631,11 +839,21 @@ class ControllerService : Service() {
                 onReport = { state, raw, interfaceId ->
                     onUsbHidFrame(conn, interfaceId, state, raw)
                 },
-                onError = { msg -> Log.e(TAG, "USB read error: $msg") },
+                onError = { msg ->
+                    Log.e(TAG, "USB read error: $msg")
+                    // Most likely unplugged: let the supervisor confirm and recover right away.
+                    scope.launch(Dispatchers.IO) { superviseUsbNow() }
+                },
             )
         reader?.start(scope)
+        kickCount = 0
+        lastKickAt = SystemClock.uptimeMillis() // give the controller a moment before kicking it
+        Diagnostics.record(TAG, "USB open: ${describe(dev)}")
         return true
     }
+
+    private fun describe(dev: UsbDevice): String =
+        (if (UsbConnectionManager.isReceiver(dev)) "puck" else "cable") + " ${dev.deviceName}"
 
     private fun onUsbHidFrame(
         connection: android.hardware.usb.UsbDeviceConnection,
@@ -643,28 +861,80 @@ class ControllerService : Service() {
         state: SteamControllerState?,
         raw: ByteArray,
     ) {
-        val reportId = raw.firstOrNull()?.toInt()?.and(0xFF)
-        val controllerActive =
-            reportId == 0x42 ||
-                reportId == 0x45 ||
-                (reportId == 0x79 && raw.getOrNull(1)?.toInt()?.and(0xFF) == 0x02)
-        if (controllerActive) {
-            activeUsbInterfaceId = interfaceId
-            val needsConfiguration =
-                synchronized(configuredUsbInterfaces) {
-                    configuredUsbInterfaces.add(interfaceId)
-                }
-            if (needsConfiguration) {
-                scope.launch(Dispatchers.IO) {
-                    if (!SteamHidProtocol.disableLizardMode(connection, interfaceId)) {
-                        synchronized(configuredUsbInterfaces) {
-                            configuredUsbInterfaces.remove(interfaceId)
+        val reportId = if (raw.isEmpty()) -1 else raw[0].toInt() and 0xFF
+        when (reportId) {
+            REPORT_STATE_USB, REPORT_STATE_BLE -> {
+                activeUsbInterfaceId = interfaceId
+                configureUsbInterface(connection, interfaceId, force = false)
+            }
+
+            // Wireless status from the puck: the controller on this slot connected or dropped.
+            REPORT_WIRELESS, REPORT_WIRELESS_X -> {
+                when (if (raw.size > 1) raw[1].toInt() and 0xFF else 0) {
+                    SteamHidProtocol.WIRELESS_CONNECTED -> {
+                        Diagnostics.record(TAG, "puck slot $interfaceId: controller connected")
+                        activeUsbInterfaceId = interfaceId
+                        kickCount = 0
+                        // A controller that was switched off comes back with its default settings
+                        // (lizard mode on, Steam watchdog on): the init must be sent again. The
+                        // first-connect-only bookkeeping used to skip exactly this.
+                        configureUsbInterface(connection, interfaceId, force = true)
+                    }
+
+                    SteamHidProtocol.WIRELESS_DISCONNECTED -> {
+                        Diagnostics.record(TAG, "puck slot $interfaceId: controller disconnected")
+                        synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.remove(interfaceId) }
+                        val active = activeUsbInterfaceId
+                        if (active == null || active == interfaceId) {
+                            markControllerOffline("wireless disconnect on slot $interfaceId")
                         }
                     }
                 }
             }
         }
         onHidFrame(state, raw)
+    }
+
+    /**
+     * Send the controller its setup (lizard mode and Steam watchdog off), once per connection of
+     * the controller on that interface - [force] for a fresh connection. Then read the firmware.
+     */
+    private fun configureUsbInterface(
+        connection: UsbDeviceConnection,
+        interfaceId: Int,
+        force: Boolean,
+    ) {
+        val needs =
+            synchronized(configuredUsbInterfaces) {
+                configuredUsbInterfaces.add(interfaceId) || force
+            }
+        if (!needs) return
+        scope.launch(Dispatchers.IO) {
+            val ok =
+                try {
+                    SteamHidProtocol.disableLizardMode(connection, interfaceId)
+                } catch (t: Throwable) {
+                    false
+                }
+            if (!ok) {
+                synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.remove(interfaceId) }
+                return@launch
+            }
+            if (ControllerLive.snapshot.value.firmware == null) {
+                val built =
+                    try {
+                        SteamHidProtocol.getFirmwareBuildTime(connection, interfaceId)
+                    } catch (t: Throwable) {
+                        null
+                    }
+                if (built != null) {
+                    val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+                    val fw = "build " + fmt.format(Date(built * 1000L))
+                    ControllerLive.update { it.copy(firmware = fw) }
+                    Diagnostics.record(TAG, "controller firmware $fw")
+                }
+            }
+        }
     }
 
     private fun initBluetooth(): Boolean {
@@ -737,11 +1007,13 @@ class ControllerService : Service() {
         // The parser returns null for anything that is not a 0x42/0x45 state report.
         if (state != null) {
             _stateFlow.value = state
+            ControllerLive.publishFrame(state)
 
             // Frames are the proof of life. Flip to LINKED immediately rather than waiting for
             // the ticker, so a reconnected controller goes green the moment it starts talking.
             val nowMs = android.os.SystemClock.uptimeMillis()
             lastFrameAt = nowMs
+            if (!controllerOnline.get()) markControllerOnline()
             if (_serviceStateFlow.value.link.state != LinkState.LINKED) refreshLinkStatus()
 
             updateReportRate(nowMs)
@@ -770,12 +1042,406 @@ class ControllerService : Service() {
         // carries no state at all. Sole battery source: bytes 44-45 of the 0x45 state report
         // were assumed to be a static battery field but turned out to be live, fast-changing
         // data (empirically: flickers 0%/99% on USB), so that guess isn't used.
-        SteamReportParser.parseBatteryStatus(raw)?.let { status ->
-            if (_serviceStateFlow.value.batteryPercent != status.percent) {
-                _serviceStateFlow.value =
-                    _serviceStateFlow.value.copy(batteryPercent = status.percent)
+        SteamReportParser.parseBatteryStatus(raw)?.let { onBattery(it) }
+    }
+
+    private fun onBattery(status: BatteryStatus) {
+        if (_serviceStateFlow.value.batteryPercent != status.percent) {
+            _serviceStateFlow.value =
+                _serviceStateFlow.value.copy(batteryPercent = status.percent)
+        }
+        val charging = status.charging
+        val snap = ControllerLive.snapshot.value
+        if (snap.batteryPercent != status.percent || snap.charging != charging) {
+            ControllerLive.update { it.copy(batteryPercent = status.percent, charging = charging) }
+        }
+        // Once per connection at 15 %, once more at 5 %. Never while on a charger, and not for a
+        // 0 that is far more likely a report without a level than a controller still running.
+        val pct = status.percent
+        if (charging == true || pct <= 0) return
+        if (pct <= BATTERY_CRITICAL_PERCENT && !batteryCriticalWarned) {
+            batteryCriticalWarned = true
+            batteryLowWarned = true
+            Pill.show(this, Pill.Kind.BATTERY_LOW, "BATTERY $pct% · CHARGE NOW")
+        } else if (pct <= BATTERY_LOW_PERCENT && !batteryLowWarned) {
+            batteryLowWarned = true
+            Pill.show(this, Pill.Kind.BATTERY_LOW, "BATTERY LOW · $pct%")
+        }
+    }
+
+    // ─── Link supervision ───────────────────────────────────────────────────────
+
+    private fun liveLink(): ControllerLive.Link =
+        when (initializedTransport) {
+            Transport.BLUETOOTH -> ControllerLive.Link.BLUETOOTH
+            Transport.USB ->
+                usbManager.device?.let {
+                    if (UsbConnectionManager.isReceiver(it)) ControllerLive.Link.PUCK else ControllerLive.Link.USB
+                } ?: ControllerLive.Link.NONE
+            null -> ControllerLive.Link.NONE
+        }
+
+    /** Link / pad / Shizuku status into ControllerLive, only when something changed. */
+    private fun publishLive() {
+        val link = liveLink()
+        val online = controllerOnline.get()
+        val padUp = mode.isVirtualDevice && uinput.isReady
+        val shizuku = shizukuRunning()
+        val s = ControllerLive.snapshot.value
+        if (s.link != link || s.connected != online || !s.serviceRunning || s.virtualPadUp != padUp ||
+            s.shizukuReady != shizuku
+        ) {
+            ControllerLive.update {
+                it.copy(
+                    link = link,
+                    connected = online,
+                    serviceRunning = true,
+                    virtualPadUp = padUp,
+                    shizukuReady = shizuku,
+                    state = if (online) it.state else null,
+                )
             }
         }
+    }
+
+    /** First frame after the controller was away (or ever): announce it. */
+    private fun markControllerOnline() {
+        if (!controllerOnline.compareAndSet(false, true)) return
+        offlineSince = 0L
+        kickCount = 0
+        batteryLowWarned = false
+        batteryCriticalWarned = false
+        outcomeJob?.cancel()
+        outcomeJob = null
+        val quiet = SystemClock.uptimeMillis() < quietLinkUntil
+        quietLinkUntil = 0L
+        Diagnostics.record(TAG, "controller online (${liveLink()})" + if (quiet) ", revived quietly" else "")
+        ControllerLive.update { it.copy(connected = true, link = liveLink()) }
+        if (!quiet) {
+            val pct = _serviceStateFlow.value.batteryPercent
+            Pill.show(
+                this,
+                Pill.Kind.CONNECTED,
+                if (pct != null && pct > 0) "CONTROLLER CONNECTED · $pct%" else "CONTROLLER CONNECTED",
+            )
+        }
+    }
+
+    /**
+     * The controller stopped talking: switched off, asleep, out of range, or its puck/cable gone.
+     * Releases everything held on the virtual pad, forgets the controller's setup (it returns
+     * with its defaults) and the slot it was on. Returns false if it was already offline.
+     */
+    private fun markControllerOffline(
+        reason: String,
+        pillText: String = "CONTROLLER OFF",
+    ): Boolean {
+        if (!controllerOnline.compareAndSet(true, false)) return false
+        offlineSince = SystemClock.uptimeMillis()
+        Log.i(TAG, "controller offline: $reason")
+        Diagnostics.record(TAG, "controller offline: $reason")
+        synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.clear() }
+        reader?.unlockInterface()
+        confirmedState = null
+        if (mode.isVirtualDevice) uinput.pushNeutral()
+        _stateFlow.value = null
+        ControllerLive.update { it.copy(connected = false, state = null, reportRate = 0) }
+        refreshLinkStatus()
+        Pill.show(this, Pill.Kind.DISCONNECTED, pillText)
+        return true
+    }
+
+    private suspend fun superviseLink() {
+        val now = SystemClock.uptimeMillis()
+        val last = lastFrameAt
+        if (controllerOnline.get() && last != 0L && now - last > FRAME_STALE_MS) {
+            markControllerOffline("no frames for ${now - last} ms")
+        }
+        if (++superviseTicks % 10 == 0) publishActiveProfile(force = true) else publishActiveProfile()
+        publishLive()
+        if (initializedTransport == Transport.USB && !initializing) superviseUsbNow()
+    }
+
+    /** USB half of the supervisor; skipped while a reconnect or attach is busy with the device. */
+    private suspend fun superviseUsbNow() {
+        if (!usbMutex.tryLock()) return
+        try {
+            superviseUsbLocked(SystemClock.uptimeMillis())
+        } finally {
+            usbMutex.unlock()
+        }
+    }
+
+    private suspend fun superviseUsbLocked(now: Long) {
+        val dev = usbManager.device
+        if (dev != null && !usbManager.isAttached(dev)) {
+            onUsbDeviceGoneLocked(dev)
+            return
+        }
+        if (dev == null) {
+            // Nothing open (unplugged earlier): pick up a supported device that has come back.
+            if (now - lastUsbScanAt < 2000L) return
+            lastUsbScanAt = now
+            val candidates = usbManager.findSteamControllers()
+            val ready = candidates.firstOrNull { usbManager.hasPermission(it) }
+            if (ready != null) {
+                connectUsbLocked(ready, "device available again")
+            } else {
+                candidates.firstOrNull()?.let { requestUsbPermission(it) }
+            }
+            return
+        }
+        if (controllerOnline.get()) return
+
+        // The device is open but the controller is silent. A controller that was powered off
+        // and on reconnects to the puck with its defaults, and may say nothing until it gets its
+        // setup again - so re-send it to any slot the puck reports as connected (to the cable's
+        // interface directly), a few seconds apart, slower after a while.
+        val interval = if (kickCount < KICKS_BEFORE_SLOW) KICK_FAST_MS else KICK_SLOW_MS
+        if (now - lastKickAt < interval) return
+        lastKickAt = now
+        kickCount++
+        val conn = usbManager.connection ?: return
+        val receiver = UsbConnectionManager.isReceiver(dev)
+        for (pipe in usbManager.inputPipes) {
+            val iface = pipe.usbInterface.id
+            if (receiver) {
+                val st =
+                    try {
+                        SteamHidProtocol.getWirelessState(conn, iface)
+                    } catch (t: Throwable) {
+                        null
+                    }
+                if (st == SteamHidProtocol.WIRELESS_CONNECTED) {
+                    Log.i(TAG, "slot $iface reports a controller but no frames: re-sending its setup")
+                    configureUsbInterface(conn, iface, force = true)
+                }
+            } else {
+                configureUsbInterface(conn, iface, force = true)
+            }
+        }
+        reader?.unlockInterface()
+
+        // A cable plugged in or pulled while the other device stays attached: if this one has been
+        // silent for a while and another Steam Controller device is there, try that one.
+        val since = offlineSince
+        if (since != 0L && now - since > SWITCH_DEVICE_AFTER_MS && now - lastDeviceSwitchAt > SWITCH_DEVICE_AFTER_MS) {
+            val alt =
+                usbManager.findSteamControllers().firstOrNull {
+                    it.deviceName != dev.deviceName && usbManager.hasPermission(it)
+                }
+            if (alt != null) {
+                lastDeviceSwitchAt = now
+                connectUsbLocked(alt, "silent ${describe(dev)}, trying ${describe(alt)}")
+            }
+        }
+    }
+
+    /** Close whatever is open and open [device] (or the best attached one). Holds [usbMutex]. */
+    private suspend fun connectUsbLocked(
+        device: UsbDevice?,
+        reason: String,
+    ): Boolean {
+        Log.i(TAG, "USB (re)connect: $reason")
+        Diagnostics.record(TAG, "USB (re)connect: $reason")
+        reader?.stopAndJoin()
+        reader = null
+        usbManager.disconnect()
+        activeUsbInterfaceId = null
+        synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.clear() }
+        val ok = initUsb(device)
+        publishLive()
+        return ok
+    }
+
+    private suspend fun reinitUsb(
+        device: UsbDevice?,
+        reason: String,
+    ): Boolean =
+        usbMutex.withLock {
+            if (device != null && usbManager.device?.deviceName == device.deviceName && controllerOnline.get()) {
+                true // already reading it, and the controller is talking
+            } else {
+                connectUsbLocked(device, reason)
+            }
+        }
+
+    /** The open USB device went away (unplugged). Holds [usbMutex]. */
+    private suspend fun onUsbDeviceGoneLocked(dev: UsbDevice) {
+        reader?.stopAndJoin()
+        reader = null
+        usbManager.disconnect()
+        activeUsbInterfaceId = null
+        synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.clear() }
+        val text = if (UsbConnectionManager.isReceiver(dev)) "PUCK UNPLUGGED" else "CABLE UNPLUGGED"
+        if (!markControllerOffline("${describe(dev)} detached", text)) {
+            Pill.show(this, Pill.Kind.DISCONNECTED, text)
+        }
+        publishLive()
+        // The cable came out but the puck is still in (or the other way round): carry on there.
+        val alt =
+            usbManager.findSteamControllers().firstOrNull {
+                it.deviceName != dev.deviceName && usbManager.hasPermission(it)
+            }
+        if (alt != null) connectUsbLocked(alt, "${describe(dev)} gone, using ${describe(alt)}")
+    }
+
+    private fun requestUsbPermission(dev: UsbDevice) {
+        val added = synchronized(usbPermissionRequested) { usbPermissionRequested.add(dev.deviceName) }
+        if (!added) return
+        try {
+            val pi =
+                PendingIntent.getBroadcast(
+                    this,
+                    3,
+                    Intent(ACTION_USB_PERMISSION).setPackage(packageName),
+                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+            getSystemService(UsbManager::class.java)?.requestPermission(dev, pi)
+            Log.i(TAG, "requested USB permission for ${describe(dev)}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "USB permission request failed: ${t.message}")
+        }
+    }
+
+    private val usbReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                val dev =
+                    IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                        ?: return
+                if (!UsbConnectionManager.isSupportedDevice(dev)) return
+                if (initializedTransport != Transport.USB) return
+                when (intent.action) {
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        Log.i(TAG, "detached: ${describe(dev)}")
+                        scope.launch(Dispatchers.IO) {
+                            usbMutex.withLock {
+                                if (usbManager.device?.deviceName == dev.deviceName) onUsbDeviceGoneLocked(dev)
+                            }
+                        }
+                    }
+
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        Log.i(TAG, "attached: ${describe(dev)}")
+                        synchronized(usbPermissionRequested) { usbPermissionRequested.remove(dev.deviceName) }
+                        scope.launch(Dispatchers.IO) {
+                            delay(300) // let the new device settle before claiming it
+                            usbMutex.withLock {
+                                // A working link stays; the supervisor moves over if it goes silent.
+                                if (usbManager.device != null && controllerOnline.get()) return@withLock
+                                if (usbManager.hasPermission(dev)) {
+                                    connectUsbLocked(dev, "${describe(dev)} attached")
+                                } else {
+                                    requestUsbPermission(dev)
+                                }
+                            }
+                        }
+                    }
+
+                    ACTION_USB_PERMISSION -> {
+                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                            scope.launch(Dispatchers.IO) { reinitUsb(dev, "USB permission granted") }
+                        } else {
+                            Pill.show(this@ControllerService, Pill.Kind.FAILED, "USB ACCESS DENIED")
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun registerUsbReceiver() {
+        val filter =
+            IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+                addAction(ACTION_USB_PERMISSION)
+            }
+        try {
+            ContextCompat.registerReceiver(this, usbReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (t: Throwable) {
+            Log.w(TAG, "USB receiver: ${t.message}")
+        }
+    }
+
+    /** After a reconnect request: if no controller has spoken by then, say what to do. */
+    private fun armOutcomePill() {
+        outcomeJob?.cancel()
+        outcomeJob =
+            scope.launch {
+                delay(RECONNECT_OUTCOME_MS)
+                if (!controllerOnline.get()) {
+                    Pill.show(this@ControllerService, Pill.Kind.DISCONNECTED, "NO CONTROLLER · PRESS STEAM")
+                }
+            }
+    }
+
+    /**
+     * ACTION_RECONNECT / requestReconnect: rebuild the controller link from scratch while the
+     * service (and the game's view of the pad) stays up.
+     */
+    private fun fullReconnect() {
+        if (reconnectJob?.isActive == true) return
+        Pill.show(this, Pill.Kind.RECONNECTING, "RECONNECTING")
+        Diagnostics.record(TAG, "reconnect requested")
+        reconnectJob =
+            scope.launch {
+                // 1. The virtual pad: recreate it in the live user service, or rebind the service.
+                if (!(mode.isVirtualDevice && (uinput.isReady || uinput.ensurePad()))) chooseInjectionMode()
+
+                // 2. The link. The next frame is announced as a fresh connection.
+                controllerOnline.set(false)
+                lastFrameAt = 0L
+                val transport = Prefs.getTransport(this@ControllerService)
+                if (initializedTransport != null && initializedTransport != transport) teardownTransport()
+                val ok =
+                    when (transport) {
+                        Transport.USB -> withContext(Dispatchers.IO) { usbMutex.withLock { connectUsbLocked(null, "reconnect requested") } }
+
+                        Transport.BLUETOOTH ->
+                            if (initializedTransport == Transport.BLUETOOTH) {
+                                btManager.reconnect()
+                                true
+                            } else {
+                                initBluetooth().also { if (it) acquireWakeLock() }
+                            }
+                    }
+                if (ok) {
+                    initializedTransport = transport
+                    armOutcomePill()
+                } else {
+                    Pill.show(
+                        this@ControllerService,
+                        Pill.Kind.FAILED,
+                        if (transport == Transport.USB) "NO STEAM CONTROLLER FOUND" else "BLUETOOTH CONTROLLER NOT FOUND",
+                    )
+                }
+                publishLive()
+            }
+    }
+
+    /** Close the current transport entirely (only for a reconnect that changes transport). */
+    private suspend fun teardownTransport() {
+        withContext(Dispatchers.IO) {
+            usbMutex.withLock {
+                reader?.stopAndJoin()
+                reader = null
+                usbManager.disconnect()
+                activeUsbInterfaceId = null
+                synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.clear() }
+            }
+        }
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        try {
+            btManager.disconnect()
+        } catch (_: Throwable) {
+        }
+        releaseWakeLock()
+        initializedTransport = null
     }
 
     private fun updateUsbTrackpadHaptics(
@@ -874,6 +1540,7 @@ class ControllerService : Service() {
         if (_serviceStateFlow.value.reportRateHz != hz) {
             _serviceStateFlow.value = _serviceStateFlow.value.copy(reportRateHz = hz)
         }
+        if (ControllerLive.snapshot.value.reportRate != hz) ControllerLive.update { it.copy(reportRate = hz) }
         rateWindowStartedAt = nowMs
         rateFrameCount = 0
     }
@@ -945,6 +1612,7 @@ class ControllerService : Service() {
                 rumbleSupported = newMode.isVirtualDevice && uinput.rumbleSupported,
             )
         refreshNotification()
+        publishLive()
     }
 
     private fun refreshNotification() {
@@ -971,6 +1639,7 @@ class ControllerService : Service() {
         val next = current.next()
         Prefs.setProfile(this, next)
         Log.i(TAG, "Cycle profile: ${current.displayName} → ${next.displayName}")
+        Pill.show(this, Pill.Kind.PROFILE, if (next.isMouseMode) "DESKTOP MODE" else "GAMEPAD MODE")
 
         // Reset baseline state immediately so any buttons "held" during the swap
         // don't get injected via the now-defunct device.
@@ -1003,6 +1672,14 @@ class ControllerService : Service() {
 
     private fun handleState(state: SteamControllerState) {
         if (mode == InjectionMode.NONE) return
+
+        // A settings screen is capturing input (input tester, "press a button"): the pad gets a
+        // neutral frame and no action fires; the frame itself still went to ControllerLive.
+        if (ControllerLive.isOutputSuppressed()) {
+            if (mode.isVirtualDevice) uinput.pushSuppressed(state)
+            confirmedState = null
+            return
+        }
 
         // Virtual devices can consume the controller's already-stable HID report directly.
         // Debouncing here added one or two full wireless frames to every button press.
@@ -1059,6 +1736,10 @@ class ControllerService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        try {
+            unregisterReceiver(usbReceiver)
+        } catch (_: Throwable) {
+        }
         com.steamcontroller.android.hub.GamehubSync.stop()
         Diagnostics.record(TAG, "service destroyed")
         releaseWakeLock()
@@ -1115,6 +1796,19 @@ class ControllerService : Service() {
         synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.clear() }
         // Reset the last controller frame so MainActivity's observer flips back to disconnected.
         _stateFlow.value = null
+        controllerOnline.set(false)
+        ControllerLive.update {
+            it.copy(
+                state = null,
+                connected = false,
+                link = ControllerLive.Link.NONE,
+                batteryPercent = null,
+                charging = null,
+                serviceRunning = false,
+                virtualPadUp = false,
+                reportRate = 0,
+            )
+        }
         super.onDestroy()
     }
 

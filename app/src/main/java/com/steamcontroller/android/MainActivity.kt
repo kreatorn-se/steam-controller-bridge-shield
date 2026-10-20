@@ -85,7 +85,9 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                        stopControllerService()
+                        // The service handles a detach itself (pill, re-open on replug, fall back
+                        // to the other device). Stopping it here sent ACTION_STOP, which also
+                        // disarmed auto-start: a replugged puck then needed a manual restart.
                         updateStatus()
                         log("Controller disconnected")
                     }
@@ -801,15 +803,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun restartService() {
         log("Reconnecting…")
-        Toast.makeText(this, R.string.reconnecting, Toast.LENGTH_SHORT).show()
-        if (serviceRunning && Prefs.getTransport(this) == Transport.BLUETOOTH) {
-            startService(
-                Intent(this, ControllerService::class.java).apply {
-                    action = ControllerService.ACTION_RECONNECT
-                }
-            )
+        // Full re-init without stopping the service; shows the RECONNECTING pill and the outcome.
+        if (ControllerService.isRunning) {
+            ControllerService.requestReconnect(this)
             return
         }
+        Toast.makeText(this, R.string.reconnecting, Toast.LENGTH_SHORT).show()
         if (serviceRunning) {
             startService(
                 Intent(this, ControllerService::class.java).apply {
