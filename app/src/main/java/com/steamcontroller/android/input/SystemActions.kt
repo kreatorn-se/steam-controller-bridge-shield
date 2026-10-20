@@ -57,7 +57,8 @@ object SystemActions {
                             true
                         } catch (t: Throwable) {
                             Log.w(TAG, "copy from Pictures failed: ${t.message}")
-                            false
+                            say(context, "Screenshot saved to Pictures · storage access needed to upload")
+                            return@Thread
                         }
                     } else if (exit == 0) {
                         // Saved locally even though there is no queue directory.

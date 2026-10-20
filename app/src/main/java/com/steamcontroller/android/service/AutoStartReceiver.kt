@@ -23,7 +23,7 @@ import com.steamcontroller.android.shizuku.ShizukuAdbStarter
 import rikka.shizuku.Shizuku
 
 /** Starts the controller service at boot or when the configured Bluetooth controller connects. */
-class AutoStartReceiver : BroadcastReceiver() {
+open class AutoStartReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "AutoStartReceiver"
         private const val ADVISORY_CHANNEL_ID = "steam_controller_autostart"
@@ -45,7 +45,13 @@ class AutoStartReceiver : BroadcastReceiver() {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED -> onBoot(context)
             BluetoothDevice.ACTION_ACL_CONNECTED -> onControllerConnected(context, intent)
-            ACTION_RETRY_SHIZUKU -> startShizukuThenService(context, intent.getIntExtra(EXTRA_ATTEMPT, 1))
+            // Retries only arrive through the non-exported ShizukuRetryReceiver; this exported
+            // receiver ignores the action so other apps cannot trigger the ADB self-connect.
+            ACTION_RETRY_SHIZUKU -> if (this is ShizukuRetryReceiver &&
+                Prefs.getStartOnBoot(context) && GamehubStore.autoStartShizuku(context)
+            ) {
+                startShizukuThenService(context, intent.getIntExtra(EXTRA_ATTEMPT, 1))
+            }
         }
     }
 
@@ -66,7 +72,7 @@ class AutoStartReceiver : BroadcastReceiver() {
         Thread({
             try {
                 if (!isShizukuReady()) {
-                    val r = ShizukuAdbStarter.startShizuku(context, timeoutMs = 15_000)
+                    val r = ShizukuAdbStarter.startShizuku(context, timeoutMs = 12_000)
                     Log.i(TAG, "Shizuku start attempt $attempt: ${r.ok} ${r.message}")
                     val deadline = SystemClock.elapsedRealtime() + SHIZUKU_READY_WAIT_MS
                     while (!isShizukuReady() && SystemClock.elapsedRealtime() < deadline) Thread.sleep(500)
@@ -86,7 +92,7 @@ class AutoStartReceiver : BroadcastReceiver() {
     }
 
     private fun scheduleRetry(context: Context, attempt: Int) {
-        val intent = Intent(context, AutoStartReceiver::class.java)
+        val intent = Intent(context, ShizukuRetryReceiver::class.java)
             .setAction(ACTION_RETRY_SHIZUKU).putExtra(EXTRA_ATTEMPT, attempt)
         val pi = PendingIntent.getBroadcast(context, 7, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val am = context.getSystemService(AlarmManager::class.java) ?: return
@@ -200,3 +206,6 @@ class AutoStartReceiver : BroadcastReceiver() {
         }
     }
 }
+
+/** Private target for the boot-time Shizuku retries (exported="false" in the manifest). */
+class ShizukuRetryReceiver : AutoStartReceiver()

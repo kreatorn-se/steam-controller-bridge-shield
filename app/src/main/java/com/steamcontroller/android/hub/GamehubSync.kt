@@ -22,8 +22,11 @@ object GamehubSync {
     private const val INTERVAL_MS = 5_000L
     private const val UPLOADS_PER_TICK = 4
 
-    private var thread: HandlerThread? = null
-    private var handler: Handler? = null
+    @Volatile private var thread: HandlerThread? = null
+    @Volatile private var handler: Handler? = null
+    // Guards network passes only. start()/stop() use the object monitor and never wait on this,
+    // so stopping the service from the main thread can't block behind an upload.
+    private val passLock = Any()
     private lateinit var app: Context
     private val main = Handler(Looper.getMainLooper())
 
@@ -41,7 +44,7 @@ object GamehubSync {
     @Synchronized
     fun stop() {
         handler?.removeCallbacksAndMessages(null)
-        thread?.quitSafely()
+        thread?.quit()
         thread = null
         handler = null
     }
@@ -62,31 +65,40 @@ object GamehubSync {
     private val tick = object : Runnable {
         override fun run() {
             runOnce()
-            handler?.postDelayed(this, INTERVAL_MS)
+            handler?.let {
+                it.removeCallbacks(this) // a kick() during this pass must not start a second loop
+                it.postDelayed(this, INTERVAL_MS)
+            }
         }
     }
 
-    @Synchronized
-    private fun runOnce() {
+    private fun runOnce() = synchronized(passLock) {
         val ctx = app
-        val token = GamehubStore.token(ctx) ?: return
+        val token = GamehubStore.token(ctx) ?: return@synchronized
         val client = GamehubClient(GamehubStore.url(ctx), token)
-        try {
-            syncConfig(ctx, client)
-            uploadPending(ctx, client)
-            GamehubStore.markOk(ctx)
-        } catch (e: GamehubClient.HubException) {
-            if (e.status == 401) {
-                Log.w(TAG, "token rejected; unlinking")
-                GamehubStore.clearLink(ctx)
-                toast("Gamehub unlinked this Shield")
-            } else {
-                GamehubStore.markError(ctx, e.message ?: "HTTP ${e.status}")
-            }
-        } catch (t: Throwable) {
-            GamehubStore.markError(ctx, t.message ?: t.javaClass.simpleName)
-            Log.w(TAG, "sync failed: ${t.message}")
+        val configOk = guarded(ctx) { syncConfig(ctx, client) }
+        if (GamehubStore.token(ctx) == null) return@synchronized // unlinked by a 401 just now
+        val uploadsOk = guarded(ctx) { uploadPending(ctx, client) }
+        if (configOk && uploadsOk) GamehubStore.markOk(ctx)
+        Unit
+    }
+
+    private inline fun guarded(ctx: Context, block: () -> Unit): Boolean = try {
+        block()
+        true
+    } catch (e: GamehubClient.HubException) {
+        if (e.status == 401) {
+            Log.w(TAG, "token rejected; unlinking")
+            GamehubStore.clearLink(ctx)
+            toast("Gamehub unlinked this Shield")
+        } else {
+            GamehubStore.markError(ctx, e.message ?: "HTTP ${e.status}")
         }
+        false
+    } catch (t: Throwable) {
+        GamehubStore.markError(ctx, t.message ?: t.javaClass.simpleName)
+        Log.w(TAG, "sync step failed: ${t.message}")
+        false
     }
 
     // ---------------------------------------------------------------- controller setup
@@ -110,7 +122,22 @@ object GamehubSync {
         // Switching between gamepad and desktop mode needs a service restart, so the hub never
         // changes it; everything else applies live.
         val root = JSONObject(json)
-        root.optJSONObject("liveSettings")?.remove("gamepadProfileId")
+        val remote = root.optJSONObject("liveSettings")
+        remote?.remove("gamepadProfileId")
+        // Stick centres and gyro bias are measured on the Shield; never take them from the hub.
+        val local = JSONObject(BackupManager.export(ctx)).optJSONObject("liveSettings")
+        if (remote != null && local != null) {
+            for (side in listOf("leftCal", "rightCal")) {
+                val r = remote.optJSONObject(side) ?: continue
+                val l = local.optJSONObject(side) ?: continue
+                r.put("cx", l.optInt("cx", 0)).put("cy", l.optInt("cy", 0))
+            }
+            val rg = remote.optJSONObject("gyro")
+            val lg = local.optJSONObject("gyro")
+            if (rg != null && lg != null) {
+                rg.put("biasX", lg.optDouble("biasX", 0.0)).put("biasY", lg.optDouble("biasY", 0.0))
+            }
+        }
         BackupManager.import(ctx, root.toString())
         GamehubStore.setConfigState(ctx, rev, hashOf(BackupManager.export(ctx)))
         Log.i(TAG, "applied hub config rev $rev")
@@ -132,9 +159,20 @@ object GamehubSync {
             if (System.currentTimeMillis() - p.png.lastModified() < 2_000) continue
             val preview = try { CaptureStore.preview(p.png) } catch (t: Throwable) { null }
             if (preview != null) { p.meta.put("width", preview.second); p.meta.put("height", preview.third) }
-            client.uploadShot(p.png, preview?.first, p.meta)
-            CaptureStore.remove(ctx, p.id)
-            Log.i(TAG, "uploaded ${p.id}")
+            try {
+                client.uploadShot(p.png, preview?.first, p.meta)
+                CaptureStore.remove(ctx, p.id)
+                Log.i(TAG, "uploaded ${p.id}")
+            } catch (e: GamehubClient.HubException) {
+                // The hub will never accept this file (bad image, too large): park it so newer
+                // captures are not stuck behind it. Auth and server errors propagate and retry.
+                if (e.status in 400..499 && e.status != 401 && e.status != 408 && e.status != 429) {
+                    CaptureStore.reject(ctx, p.id)
+                    Log.w(TAG, "hub rejected ${p.id} (${e.status}); moved aside")
+                } else {
+                    throw e
+                }
+            }
         }
     }
 

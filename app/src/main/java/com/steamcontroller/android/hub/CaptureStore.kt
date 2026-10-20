@@ -58,6 +58,13 @@ object CaptureStore {
     fun pendingCount(context: Context): Int =
         dir(context)?.listFiles { f: java.io.File -> f.name.endsWith(".png") }?.size ?: 0
 
+    /** Moves a capture the hub refused out of the queue (kept as .rejected for inspection). */
+    fun reject(context: Context, id: String) {
+        val d = dir(context) ?: return
+        File(d, "$id.png").renameTo(File(d, "$id.png.rejected"))
+        File(d, "$id.json").delete()
+    }
+
     fun remove(context: Context, id: String) {
         val d = dir(context) ?: return
         File(d, "$id.png").delete()
