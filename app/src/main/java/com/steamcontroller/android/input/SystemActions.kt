@@ -1,14 +1,13 @@
 package com.steamcontroller.android.input
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
-import android.widget.Toast
 import com.steamcontroller.android.hub.CaptureStore
 import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.hub.GamehubSync
 import com.steamcontroller.android.service.UsageStatsHelper
+import com.steamcontroller.android.ui.pill.Pill
 import com.steamcontroller.android.uinput.ShellAllowlist
 import java.io.File
 
@@ -20,6 +19,7 @@ import java.io.File
 object SystemActions {
 
     private const val TAG = "SystemActions"
+    private const val CAPTURED_MAX_WAIT_MS = 450L
 
     /**
      * Captures the screen with `screencap` straight into the Gamehub upload queue
@@ -29,19 +29,20 @@ object SystemActions {
      * file into the queue from there (needs the storage read permission the installer grants).
      */
     fun takeScreenshot(context: Context, runShell: (Array<String>) -> Int) {
+        val app = context.applicationContext
         Thread({
             try {
                 val capturedAt = System.currentTimeMillis()
                 val id = CaptureStore.newId(capturedAt)
-                val queueDir = CaptureStore.dir(context)
-                val fg = try { UsageStatsHelper.getCurrentForegroundApp(context) } catch (_: Throwable) { null }
+                val queueDir = CaptureStore.dir(app)
+                val fg = try { UsageStatsHelper.getCurrentForegroundApp(app) } catch (_: Throwable) { null }
 
-                say(context, "Capturing…")
                 var ok = false
                 if (queueDir != null) {
                     // Write under a temporary name: a 4K PNG takes the Shield 15-30 s to encode
                     // during a stream, and the uploader must never pick up a half-written file.
                     val tmp = File(queueDir, "${CaptureStore.TMP_PREFIX}$id.png")
+                    announceCapturedWhenGrabbed(app, tmp)
                     val exit = runShell(arrayOf("screencap", "-p", tmp.path))
                     ok = exit == 0 && CaptureStore.isCompletePng(tmp) && tmp.renameTo(File(queueDir, "$id.png"))
                     if (!ok) {
@@ -50,23 +51,42 @@ object SystemActions {
                     }
                     // Only fall back to Pictures when the queue directory itself was unwritable;
                     // re-encoding after a slow capture would just double the wait.
-                    if (!ok && exit != -1) ok = captureViaPictures(context, runShell, id, queueDir)
+                    if (!ok && exit != -1) ok = captureViaPictures(app, runShell, id, queueDir)
                 }
                 if (!ok) {
-                    say(context, "Screenshot failed")
+                    Pill.show(app, Pill.Kind.FAILED, "CAPTURE FAILED")
                     return@Thread
                 }
-                CaptureStore.writeMeta(context, id, capturedAt, fg)
-                if (GamehubStore.isLinked(context)) {
-                    say(context, "Captured · uploading to Gamehub")
-                    GamehubSync.kick(context)
+                CaptureStore.writeMeta(app, id, capturedAt, fg)
+                if (GamehubStore.isLinked(app)) {
+                    // GamehubSync shows SAVED TO GAMEHUB once the upload has gone through.
+                    GamehubSync.kick(app)
                 } else {
-                    say(context, "Captured · link Gamehub to upload")
+                    Pill.show(app, Pill.Kind.SAVED, "SAVED")
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "Screenshot threw: ${t.message}")
+                Pill.show(app, Pill.Kind.FAILED, "CAPTURE FAILED")
             }
         }, "screencap").apply { isDaemon = true; start() }
+    }
+
+    /**
+     * CAPTURED as soon as screencap has the frame. screencap grabs the display within ~150 ms of
+     * starting and then spends 15-30 s encoding the PNG; showing the pill at the press itself
+     * would put the pill in the screenshot. Bytes in the file prove the grab is done (on builds
+     * that stream the encode); otherwise the pill follows after a short, still-instant-feeling
+     * delay that clears the grab.
+     */
+    private fun announceCapturedWhenGrabbed(app: Context, file: File) {
+        Thread({
+            val deadline = SystemClock.uptimeMillis() + CAPTURED_MAX_WAIT_MS
+            try {
+                while (SystemClock.uptimeMillis() < deadline && file.length() <= 0L) Thread.sleep(25)
+            } catch (_: InterruptedException) {
+            }
+            Pill.show(app, Pill.Kind.CAPTURED, "CAPTURED")
+        }, "screencap-pill").apply { isDaemon = true; start() }
     }
 
     private fun captureViaPictures(context: Context, runShell: (Array<String>) -> Int, id: String, queueDir: File): Boolean {
@@ -79,12 +99,8 @@ object SystemActions {
             true
         } catch (t: Throwable) {
             Log.w(TAG, "copy from Pictures failed: ${t.message}")
-            say(context, "Screenshot saved to Pictures · storage access needed to upload")
+            Pill.show(context, Pill.Kind.FAILED, "SAVED TO PICTURES · NO UPLOAD ACCESS")
             false
         }
-    }
-
-    private fun say(context: Context, msg: String) {
-        Handler(Looper.getMainLooper()).post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
     }
 }

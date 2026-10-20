@@ -5,8 +5,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
-import android.widget.Toast
 import com.steamcontroller.android.backup.BackupManager
+import com.steamcontroller.android.ui.pill.Pill
 import org.json.JSONObject
 import java.security.MessageDigest
 
@@ -21,6 +21,13 @@ object GamehubSync {
     private const val TAG = "GamehubSync"
     private const val INTERVAL_MS = 5_000L
     private const val UPLOADS_PER_TICK = 4
+
+    // A capture is announced as "saved" only when it was taken this recently: a backlog uploaded
+    // after a long offline spell must not pop a pill in the middle of a game.
+    private const val ANNOUNCE_MAX_AGE_MS = 10 * 60_000L
+
+    // Uploads finishing within this window share one pill ("3 SAVED TO GAMEHUB").
+    private const val ANNOUNCE_COALESCE_MS = 1_200L
 
     @Volatile private var thread: HandlerThread? = null
     @Volatile private var handler: Handler? = null
@@ -90,7 +97,7 @@ object GamehubSync {
         if (e.status == 401) {
             Log.w(TAG, "token rejected; unlinking")
             GamehubStore.clearLink(ctx)
-            toast("Gamehub unlinked this Shield")
+            Pill.show(ctx, Pill.Kind.FAILED, "GAMEHUB UNLINKED")
         } else {
             GamehubStore.markError(ctx, e.message ?: "HTTP ${e.status}")
         }
@@ -141,7 +148,7 @@ object GamehubSync {
         BackupManager.import(ctx, root.toString())
         GamehubStore.setConfigState(ctx, rev, hashOf(BackupManager.export(ctx)))
         Log.i(TAG, "applied hub config rev $rev")
-        toast("Controller setup updated from Gamehub")
+        Pill.show(ctx, Pill.Kind.INFO, "SETUP UPDATED FROM GAMEHUB")
     }
 
     private fun hashOf(exportJson: String): String {
@@ -163,6 +170,10 @@ object GamehubSync {
                 client.uploadShot(p.png, preview?.first, p.meta)
                 CaptureStore.remove(ctx, p.id)
                 Log.i(TAG, "uploaded ${p.id}")
+                val capturedAt = p.meta.optLong("capturedAt", 0L)
+                if (capturedAt > 0 && System.currentTimeMillis() - capturedAt in 0..ANNOUNCE_MAX_AGE_MS) {
+                    announceSaved()
+                }
             } catch (e: GamehubClient.HubException) {
                 // The hub will never accept this file (bad image, too large): park it so newer
                 // captures are not stuck behind it. Auth and server errors propagate and retry.
@@ -176,7 +187,21 @@ object GamehubSync {
         }
     }
 
-    private fun toast(msg: String) {
-        main.post { try { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() } catch (_: Throwable) {} }
+    // ---------------------------------------------------------------- "saved" pill
+
+    private var savedPending = 0 // main thread only
+
+    private val showSaved = Runnable {
+        val n = savedPending
+        savedPending = 0
+        if (n > 0) Pill.show(app, Pill.Kind.SAVED, if (n == 1) "SAVED TO GAMEHUB" else "$n SAVED TO GAMEHUB")
+    }
+
+    private fun announceSaved() {
+        main.post {
+            savedPending++
+            main.removeCallbacks(showSaved)
+            main.postDelayed(showSaved, ANNOUNCE_COALESCE_MS)
+        }
     }
 }
