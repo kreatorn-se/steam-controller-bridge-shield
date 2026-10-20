@@ -179,6 +179,27 @@ class HomePage(host: Host) : Page(host) {
         if (shown) HomeRepo.refresh(ctx, 5_000L)
     }
 
+    private var released = false
+
+    override fun releaseImages() {
+        released = true
+        drift?.cancel()
+        for (iv in listOf(heroA, heroB, logo)) Img.release(iv)
+        nowCard.release()
+        for (v in rowViews()) {
+            for (k in 0 until v.list.childCount) (v.list.getChildAt(k) as? Tile)?.let { Img.release(it.image) }
+            v.list.recycledViewPool.clear()
+        }
+    }
+
+    override fun restoreImages() {
+        if (!released) return
+        released = false
+        if (mode == Mode.CONTENT) showHero(heroIndex, animate = false)
+        home?.nowPlaying?.let { nowCard.bind(it) }
+        for (v in rowViews()) v.list.adapter?.let { it.notifyItemRangeChanged(0, it.itemCount) }
+    }
+
     /** Back: rows first scroll back up to the hero, then the shell takes over (rail, exit). */
     override fun onBack(): Boolean {
         if (rowsBox.hasFocus()) {
@@ -281,12 +302,17 @@ class HomePage(host: Host) : Page(host) {
             favBtn.visibility = View.VISIBLE
         }
         val keepId = heroList.getOrNull(heroIndex)?.id
-        heroList = h.hero.ifEmpty { h.rows.firstOrNull { it.shots.isNotEmpty() }?.shots?.take(8) ?: emptyList() }
-        heroIndex = heroList.indexOfFirst { it.id == keepId }.coerceAtLeast(0)
-        buildDots()
-        showHero(heroIndex, animate = !first)
-        rebuildRows(h, hadFocus)
-        prefetchHero()
+        val newHero = h.hero.ifEmpty { h.rows.firstOrNull { it.shots.isNotEmpty() }?.shots?.take(8) ?: emptyList() }
+        val heroChanged = first || newHero.map { it.id } != heroList.map { it.id }
+        heroList = newHero
+        if (heroChanged) {
+            heroIndex = heroList.indexOfFirst { it.id == keepId }.coerceAtLeast(0)
+            buildDots()
+            // The same picture stays up: only a new one crossfades in.
+            if (first || heroList.getOrNull(heroIndex)?.id != keepId) showHero(heroIndex, animate = !first)
+            prefetchHero()
+        }
+        updateRows(h, hadFocus)
     }
 
     private fun signatureOf(h: GamehubTv.Home): String = buildString {
@@ -428,34 +454,89 @@ class HomePage(host: Host) : Page(host) {
 
     // ── rows ──────────────────────────────────────────────────────────────────────────
 
-    private class RowView(ctx: Context, val row: GamehubTv.Row) : LinearLayout(ctx) {
+    private class RowView(ctx: Context, var row: GamehubTv.Row, val kind: TileKind) : LinearLayout(ctx) {
         val memory = FocusMemoryFrame(ctx)
         lateinit var list: TvRecycler
         val header = Kit.label(ctx, "", 12.5f, C.text2)
         val count = Kit.label(ctx, "", 11f, C.text3)
     }
 
-    private fun rebuildRows(h: GamehubTv.Home, hadFocus: Boolean) {
-        // Restore focus to the same row and item after a refresh changed the rows.
-        val focusedRow = (0 until rowsBox.childCount).map { rowsBox.getChildAt(it) as RowView }.firstOrNull { it.hasFocus() }
-        val focusedRowId = focusedRow?.row?.id
+    private fun rowViews(): List<RowView> = (0 until rowsBox.childCount).map { rowsBox.getChildAt(it) as RowView }
+
+    /**
+     * Rows are updated in place by id: a refresh (the one-minute tick, a favourite from show
+     * mode) changes the cards that changed and nothing else, so focus and scroll stay put. Only
+     * rows that are new, gone or changed kind are built or removed.
+     */
+    private fun updateRows(h: GamehubTv.Home, hadFocus: Boolean) {
+        val existing = rowViews().associateBy { it.row.id }
+        val focusedRow = rowViews().firstOrNull { it.hasFocus() }
         val focusedPos = focusedRow?.let { rv -> rv.list.findFocus()?.let { f -> rv.list.findContainingViewHolder(f)?.bindingAdapterPosition } } ?: -1
-        rowsBox.removeAllViews()
-        for (r in h.rows) rowsBox.addView(buildRow(r))
-        if (focusedRowId != null) {
-            val target = (0 until rowsBox.childCount).map { rowsBox.getChildAt(it) as RowView }.firstOrNull { it.row.id == focusedRowId }
-            if (target != null) {
-                val pos = focusedPos.coerceIn(0, (target.list.adapter?.itemCount ?: 1) - 1)
-                target.list.scrollToPosition(pos)
-                target.list.post { target.list.layoutManager?.findViewByPosition(pos)?.requestFocus() ?: target.memory.requestFocus() }
-            } else playBtn.requestFocus()
+        val wanted = h.rows.map { r ->
+            val old = existing[r.id]
+            if (old != null && old.kind == tileKind(r)) { refreshRow(old, r); old } else buildRow(r)
+        }
+        if (wanted != rowViews()) {
+            for (v in rowViews()) if (v !in wanted) rowsBox.removeView(v)
+            for ((i, v) in wanted.withIndex()) {
+                if (rowsBox.getChildAt(i) === v) continue
+                (v.parent as? ViewGroup)?.removeView(v)
+                rowsBox.addView(v, i)
+            }
+        }
+        // The focused row went away: land on the same place in its replacement, or the hero.
+        if (focusedRow != null && !focusedRow.hasFocus() && !root.hasFocus()) {
+            val target = wanted.firstOrNull { it.row.id == focusedRow.row.id }
+            if (target != null) focusRowItem(target, focusedPos) else playBtn.requestFocus()
         } else if (hadFocus && !root.hasFocus()) {
             playBtn.requestFocus()
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun refreshRow(v: RowView, r: GamehubTv.Row) {
+        v.row = r
+        v.header.text = r.title
+        v.count.text = rowMeta(r)
+        val a = v.list.adapter ?: return
+        if (r.shots.isNotEmpty()) {
+            (a as SimpleAdapter<GamehubTv.Shot>).update(r.shots, { it.id }) { x, y -> x.favorite == y.favorite && x.game == y.game && x.capturedAt == y.capturedAt }
+            // Show mode flips favourites on shared objects; re-bind in place (same holders, focus kept).
+            a.notifyItemRangeChanged(0, a.itemCount, "favourite")
+        }
+        else (a as SimpleAdapter<GamehubTv.Coll>).update(r.colls, { it.collection }) { x, y -> x.title == y.title && x.count == y.count && x.cover?.id == y.cover?.id && x.art == y.art && x.avatar == y.avatar }
+    }
+
+    private fun focusRowItem(v: RowView, pos: Int) {
+        val n = v.list.adapter?.itemCount ?: 0
+        if (n == 0) { playBtn.requestFocus(); return }
+        val p = pos.coerceIn(0, n - 1)
+        val shown = v.list.layoutManager?.findViewByPosition(p)
+        if (shown != null && shown.requestFocus()) return
+        v.list.scrollToPosition(p)
+        v.list.post { v.list.layoutManager?.findViewByPosition(p)?.requestFocus() ?: v.memory.requestFocus() }
+    }
+
+    /** Where focus was when show mode opened: (row id, position), or null for the hero. */
+    private var showOrigin: Pair<String, Int>? = null
+
+    private fun rememberOrigin(v: View?) {
+        showOrigin = null
+        val row = rowViews().firstOrNull { it.hasFocus() } ?: return
+        val pos = v?.let { row.list.findContainingViewHolder(it)?.bindingAdapterPosition } ?: return
+        if (pos >= 0) showOrigin = row.row.id to pos
+    }
+
+    override fun restoreFocus(): Boolean {
+        val (id, pos) = showOrigin ?: return false
+        showOrigin = null
+        val v = rowViews().firstOrNull { it.row.id == id } ?: return false
+        focusRowItem(v, pos)
+        return true
+    }
+
     private fun buildRow(r: GamehubTv.Row): RowView {
-        val v = RowView(ctx, r)
+        val v = RowView(ctx, r, tileKind(r))
         v.orientation = LinearLayout.VERTICAL
         v.clipChildren = false
         v.clipToPadding = false
@@ -471,7 +552,7 @@ class HomePage(host: Host) : Page(host) {
         list.setPadding(left, 0, safeH, 0)
         list.layoutManager = KeylineLinear(ctx, LinearLayoutManagerH, keyline = { left }).apply { initialPrefetchItemCount = 6 }
         list.setItemViewCacheSize(4)
-        val kind = tileKind(r)
+        val kind = v.kind
         val wDp = kind.w
         val gap = ctx.dp(12)
         list.addItemDecoration(object : androidx.recyclerview.widget.RecyclerView.ItemDecoration() {
@@ -486,15 +567,16 @@ class HomePage(host: Host) : Page(host) {
                 Img.into(t.image, shot.previewUrl, spec)
                 t.setFavorite(shot.favorite)
                 t.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot) + "  ·  " + Fmt.time(shot))
-                t.card.setOnClickListener { playRow(r, i) }
+                // Positions can move with in-place updates: ask at click time.
+                t.card.setOnClickListener { val p = list.getChildAdapterPosition(t); if (p >= 0) { rememberOrigin(t.card); playRow(v.row, p) } }
                 t.focusListener = { has -> v.header.setTextColor(if (has) C.text else C.text2) }
-                prefetchAhead(r.shots, i, spec)
+                prefetchAhead(v.row.shots, i, spec)
             }
         } else {
             list.adapter = SimpleAdapter(r.colls, { Tile(ctx, kind.w, kind.h, captionOnFocus = kind.captionOnFocus, circle = kind.circle) }) { view, coll, i ->
                 val t = view as Tile
                 bindColl(t, coll, kind, spec)
-                t.card.setOnClickListener { playColls(r, i) }
+                t.card.setOnClickListener { val p = list.getChildAdapterPosition(t); if (p >= 0) { rememberOrigin(t.card); playColls(v.row, p) } }
                 t.focusListener = { has -> v.header.setTextColor(if (has) C.text else C.text2) }
             }
         }
@@ -580,11 +662,13 @@ class HomePage(host: Host) : Page(host) {
     }
 
     private fun playHero() {
+        showOrigin = null
         if (heroList.isEmpty()) return
         host.openShow(ShowRequest(siblings(), 0, startShotId = heroList.getOrNull(heroIndex)?.id))
     }
 
     private fun playFavourites() {
+        showOrigin = null
         val sib = siblings()
         val i = sib.indexOfFirst { it.collection == "favourites" || it.collection == "favorites" }
         if (i >= 0) host.openShow(ShowRequest(sib, i))
@@ -592,6 +676,7 @@ class HomePage(host: Host) : Page(host) {
     }
 
     private fun playGame(game: String) {
+        showOrigin = null
         host.openShow(ShowRequest(listOf(CollRef("game:$game", game)), 0))
     }
 
@@ -689,6 +774,12 @@ class NowPlayingCard(ctx: Context) : FrameLayout(ctx) {
         inner.addView(col, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply { setMargins(dp(16), dp(12), dp(16), dp(12)) })
         addView(inner, LayoutParams(dp(W), dp(H)))
         contentDescription = "Now playing"
+    }
+
+    fun release() {
+        game = null
+        Img.release(art)
+        Img.release(logo)
     }
 
     fun bind(np: GamehubTv.NowPlaying) {

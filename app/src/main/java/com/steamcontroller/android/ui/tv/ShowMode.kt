@@ -62,7 +62,9 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     private val screenH = dm.heightPixels
     private val safeH = ctx.resources.getDimensionPixelSize(R.dimen.safe_h)
     private val safeV = ctx.resources.getDimensionPixelSize(R.dimen.safe_v)
+    /** Previews decode at the UI surface's width (1920 on a Shield); nothing larger is held. */
     private val full = Img.Spec(screenW)
+    private val originalSpec = Img.Spec(screenW, original = true)
     private val handler = Handler(Looper.getMainLooper())
 
     val root = FrameLayout(ctx)
@@ -307,6 +309,27 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         onClose()
     }
 
+    private var released = false
+
+    /** The activity was stopped (a game started): let go of every bitmap, keep the place. */
+    fun releaseImages() {
+        released = true
+        imgToken++
+        kb?.cancel()
+        for (iv in listOf(imgA, imgB, backdrop, capLogo)) Img.release(iv)
+        captionGame = null
+        for (rv in listOf(strip, grid)) {
+            for (k in 0 until rv.childCount) (rv.getChildAt(k) as? Thumb)?.let { Img.release(it.image) }
+            rv.recycledViewPool.clear()
+        }
+    }
+
+    fun restoreImages() {
+        if (!released || closed) return
+        released = false
+        if (items.isNotEmpty()) { refreshThumbs(); showCurrent(manual = false, fade = true) }
+    }
+
     /** Activity paused: stop the clock, keep the place. */
     fun pause() {
         if (playing) setPlaying(false, announce = false)
@@ -328,11 +351,8 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         items.clear()
         next = null
         captionGame = null
-        var initial: List<Shot>? = ref.items ?: preload
+        val initial: List<Shot>? = ref.items ?: preload
         if (initial != null && preload != null) next = preloadNext
-        if (initial == null && ref.collection != null) {
-            GamehubTv.cachedShots(ctx, ref.collection)?.let { initial = it.items; next = it.next }
-        }
         initial?.let { items.addAll(it) }
         if (announce) announceColl(ref)
         if (items.isNotEmpty()) {
@@ -347,6 +367,20 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         val coll = ref.collection ?: return
         if (ref.items != null) return
         job = act.lifecycleScope.launch {
+            // The saved first page (read off the main thread) while the hub answers.
+            if (items.isEmpty()) {
+                val cached = withContext(Dispatchers.IO) { GamehubTv.cachedShots(ctx, coll) }
+                if (token != collToken || closed) return@launch
+                if (cached != null && cached.items.isNotEmpty() && items.isEmpty()) {
+                    items.addAll(cached.items)
+                    next = cached.next
+                    message.visibility = View.GONE
+                    index = items.indexOfFirst { it.id == startShotId }.coerceAtLeast(0)
+                    sel = index
+                    refreshThumbs()
+                    showCurrent(manual = false, fade = true)
+                }
+            }
             val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, coll) }
             if (token != collToken || closed) return@launch
             when (r) {
@@ -360,6 +394,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
                     if (hadItems && preload != null) for (s in items) if (s.id !in ids) { fresh.add(s); ids.add(s.id) }
                     items.clear(); items.addAll(fresh)
                     next = r.value.next
+                    moreFailedAt = 0L
                     if (items.isEmpty()) { showMessage(ctx.getString(R.string.show_empty)); return@launch }
                     index = items.indexOfFirst { it.id == keep }.coerceAtLeast(0)
                     sel = index
@@ -374,17 +409,23 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         }
     }
 
+    /** When the last page load failed (offline): no new attempt for a while, the show loops instead. */
+    private var moreFailedAt = 0L
+    private fun moreBlocked() = moreFailedAt != 0L && android.os.SystemClock.uptimeMillis() - moreFailedAt < MORE_BACKOFF_MS
+
     private fun loadMore() {
         val cursor = next ?: return
         val coll = colls.getOrNull(collIndex)?.collection ?: return
-        if (loadingMore) return
+        if (loadingMore || moreBlocked()) return
         loadingMore = true
         val token = collToken
         act.lifecycleScope.launch {
             val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, coll, before = cursor) }
             if (token != collToken || closed) return@launch
             loadingMore = false
+            if (r is GamehubTv.Res.Err) moreFailedAt = android.os.SystemClock.uptimeMillis()
             if (r is GamehubTv.Res.Ok) {
+                moreFailedAt = 0L
                 val ids = items.mapTo(HashSet()) { it.id }
                 val start = items.size
                 for (s in r.value.items) if (ids.add(s.id)) items.add(s)
@@ -480,10 +521,13 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         } else if (backdrop.alpha > 0f) {
             backdrop.animate().alpha(0f).setDuration(fadeMs.coerceAtLeast(200L)).start()
         }
-        // Then the original, swapped in place: same framing, sharper.
-        Img.load(shot.fullUrl, full) { orig ->
-            if (token != imgToken || orig == null || front !== back) return@load
-            back.setImageBitmap(orig)
+        // Then the original, swapped in place (same framing, sharper), but only when the preview
+        // (~1600 px) is smaller than the screen: on a 1080p UI surface it rarely is by much.
+        if (preview.width < screenW * 0.97f && (shot.width == 0 || shot.width > preview.width)) {
+            Img.load(shot.fullUrl, originalSpec) { orig ->
+                if (token != imgToken || orig == null || front !== back) return@load
+                back.setImageBitmap(orig)
+            }
         }
         if (playing) handler.postDelayed(advance, interval * 1000L)
     }
@@ -492,7 +536,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         override fun run() {
             if (!playing || closed || items.isEmpty()) return
             if (stage == Stage.STRIP || stage == Stage.GRID) return
-            if (index + 1 >= items.size && next != null) {
+            if (index + 1 >= items.size && next != null && !moreBlocked()) {
                 // The next page is on its way: wait for it rather than wrap early.
                 loadMore()
                 handler.postDelayed(this, 1000L)
@@ -506,7 +550,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
 
     private fun prefetchAround() {
         for (d in 1..2) items.getOrNull(index + d)?.let { Img.prefetch(it.previewUrl, full) }
-        items.getOrNull(index + 1)?.let { Img.prefetchDisk(it.fullUrl) }
+        items.getOrNull(index + 1)?.let { if (it.width > screenW * 0.85f || it.width == 0) Img.prefetchDisk(it.fullUrl) }
         items.getOrNull(index - 1)?.let { Img.prefetch(it.previewUrl, full) }
     }
 
@@ -653,8 +697,6 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
                     grid.adapter?.notifyItemChanged(i)
                 }
                 Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.show_fav_failed))
-            } else {
-                HomeRepo.refresh(ctx, 0L)
             }
         }
     }
@@ -941,7 +983,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         val n = index + d
         when {
             n < 0 -> { nudge(1); return }
-            n >= items.size -> { if (next != null) { loadMore(); nudge(-1); return } else index = 0 }
+            n >= items.size -> { if (next != null && !moreBlocked()) { loadMore(); nudge(-1); return } else index = 0 }
             else -> index = n
         }
         sel = index
@@ -950,6 +992,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
 
     private companion object {
         const val CAPTION_MS = 4500L
+        const val MORE_BACKOFF_MS = 30_000L
     }
 }
 

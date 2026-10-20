@@ -39,6 +39,8 @@ class LibraryPage(host: Host) : Page(host) {
 
     private val handler = Handler(Looper.getMainLooper())
     private val tabs = Kit.row(ctx)
+    /** ↑ from the grid lands on the current tab, never a neighbour (which would switch tabs). */
+    private val tabsMemory = FocusMemoryFrame(ctx)
     private val tabViews = LinkedHashMap<Tab, TextView>()
     private val gridMemory = FocusMemoryFrame(ctx)
     private val grid = TvRecycler(ctx, TvRecycler.LOCK_RIGHT or TvRecycler.LOCK_DOWN)
@@ -65,7 +67,11 @@ class LibraryPage(host: Host) : Page(host) {
             tabViews[t] = b
             tabs.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(4) })
         }
-        col.addView(tabs, Kit.lp(l = -3, ctx = ctx))
+        tabsMemory.clipChildren = false
+        tabsMemory.addView(tabs)
+        tabsMemory.fallback = { tabViews[tab] }
+        tabsMemory.remembered = tabViews[tab]
+        col.addView(tabsMemory, Kit.lp(l = -3, ctx = ctx))
         val body = FrameLayout(ctx)
         body.clipChildren = false
         grid.setPadding(0, ctx.dp(14), 0, ctx.dp(40))
@@ -99,18 +105,32 @@ class LibraryPage(host: Host) : Page(host) {
     override fun onShow() {
         if (!loadedOnce) {
             loadedOnce = true
-            GamehubTv.cachedList(ctx, "games")?.let { lists[Tab.GAMES] = it }
-            GamehubTv.cachedList(ctx, "albums")?.let { lists[Tab.ALBUMS] = it }
-            GamehubTv.cachedList(ctx, "people")?.let { lists[Tab.PEOPLE] = it }
-            GamehubTv.cachedShots(ctx, "favourites")?.let { favs.addAll(it.items); favNext = it.next }
             show(tab)
+            host.activity.lifecycleScope.launch {
+                // The saved copies, read and parsed off the main thread, then the hub's.
+                val g = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "games") }
+                val a = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "albums") }
+                val p = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "people") }
+                val f = withContext(Dispatchers.IO) { GamehubTv.cachedShots(ctx, "favourites") }
+                if (g != null && !lists.containsKey(Tab.GAMES)) lists[Tab.GAMES] = g
+                if (a != null && !lists.containsKey(Tab.ALBUMS)) lists[Tab.ALBUMS] = a
+                if (p != null && !lists.containsKey(Tab.PEOPLE)) lists[Tab.PEOPLE] = p
+                if (f != null && favs.isEmpty()) { favs.addAll(f.items); favNext = f.next }
+                updateGrid()
+                fetchAll()
+            }
+            return
         }
         fetchAll()
     }
 
     override fun refresh() { if (loadedOnce) fetchAll() }
 
+    private var fetching = false
+
     private fun fetchAll() {
+        if (fetching) return
+        fetching = true
         host.activity.lifecycleScope.launch {
             val g = withContext(Dispatchers.IO) { GamehubTv.games(ctx) }
             applyList(Tab.GAMES, g)
@@ -122,26 +142,46 @@ class LibraryPage(host: Host) : Page(host) {
             when (f) {
                 is GamehubTv.Res.Ok -> {
                     errors.remove(Tab.FAVOURITES)
-                    val same = favs.map { it.id } == f.value.items.map { it.id }.take(favs.size) && favs.size == f.value.items.size
-                    if (!same) { favs.clear(); favs.addAll(f.value.items); favNext = f.value.next; if (tab == Tab.FAVOURITES) show(tab) }
+                    val fresh = f.value.items
+                    // Keep pages already loaded beyond the first when page one did not change.
+                    if (favs.take(fresh.size).map { it.id } != fresh.map { it.id }) {
+                        favs.clear(); favs.addAll(fresh); favNext = f.value.next
+                    }
                 }
-                is GamehubTv.Res.Err -> { errors[Tab.FAVOURITES] = f; if (tab == Tab.FAVOURITES && favs.isEmpty()) show(tab) }
+                is GamehubTv.Res.Err -> {
+                    errors[Tab.FAVOURITES] = f
+                    if (f.fail == GamehubTv.Fail.NOT_LINKED || f.fail == GamehubTv.Fail.UNAUTHORIZED) { favs.clear(); favNext = null }
+                }
             }
-            renderTabs()
+            fetching = false
+            updateGrid()
         }
     }
 
     private fun applyList(t: Tab, r: GamehubTv.Res<List<Coll>>) {
         when (r) {
-            is GamehubTv.Res.Ok -> {
-                errors.remove(t)
-                val old = lists[t]
-                lists[t] = r.value
-                if (tab == t && old != r.value) show(t)
+            is GamehubTv.Res.Ok -> { errors.remove(t); lists[t] = r.value }
+            is GamehubTv.Res.Err -> {
+                errors[t] = r
+                // Unlinked or refused: what was shown belongs to that link.
+                if (r.fail == GamehubTv.Fail.NOT_LINKED || r.fail == GamehubTv.Fail.UNAUTHORIZED) lists.remove(t)
             }
-            is GamehubTv.Res.Err -> { errors[t] = r; if (tab == t && lists[t].isNullOrEmpty()) show(t) }
         }
+        if (t == tab) updateGrid() else renderTabs()
+    }
+
+    /**
+     * New data for the current tab goes into the existing adapter as a diff, so focus and scroll
+     * stay where they are; [show] (a new adapter) is only for switching tabs.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun updateGrid() {
         renderTabs()
+        val a = grid.adapter
+        if (a == null) { show(tab); return }
+        if (tab == Tab.FAVOURITES) (a as SimpleAdapter<Shot>).update(ArrayList(favs), { it.id }) { x, y -> x.favorite == y.favorite && x.game == y.game }
+        else (a as SimpleAdapter<Coll>).update(lists[tab] ?: emptyList(), { it.collection }) { x, y -> x == y }
+        renderMessage(tab, a.itemCount == 0)
     }
 
     private fun renderTabs() {
@@ -156,6 +196,7 @@ class LibraryPage(host: Host) : Page(host) {
     private fun select(t: Tab) {
         if (t == tab) return
         tab = t
+        tabsMemory.remembered = tabViews[t]
         show(t)
     }
 
@@ -172,7 +213,7 @@ class LibraryPage(host: Host) : Page(host) {
         val spec = Img.Spec(ctx.px(t.w))
         val empty: Boolean
         if (t == Tab.FAVOURITES) {
-            grid.adapter = SimpleAdapter(favs, { Tile(ctx, t.w, t.h, captionOnFocus = true) }) { v, shot, i ->
+            grid.adapter = SimpleAdapter(ArrayList(favs), { Tile(ctx, t.w, t.h, captionOnFocus = true) }) { v, shot, i ->
                 val tile = v as Tile
                 Img.into(tile.image, shot.previewUrl, spec)
                 tile.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot))
@@ -182,20 +223,24 @@ class LibraryPage(host: Host) : Page(host) {
             empty = favs.isEmpty()
         } else {
             val items = lists[t] ?: emptyList()
-            grid.adapter = SimpleAdapter(items, { Tile(ctx, t.w, t.h, captionOnFocus = t == Tab.GAMES, circle = t.circle) }) { v, c, i ->
+            grid.adapter = SimpleAdapter(items, { Tile(ctx, t.w, t.h, captionOnFocus = t == Tab.GAMES, circle = t.circle) }) { v, c, _ ->
                 val tile = v as Tile
                 bind(tile, c, t, spec)
-                tile.card.setOnClickListener { play(t, i) }
+                tile.card.setOnClickListener { val p = grid.getChildAdapterPosition(tile); if (p >= 0) play(t, p) }
             }
             empty = items.isEmpty()
         }
+        renderMessage(t, empty)
+    }
+
+    private fun renderMessage(t: Tab, empty: Boolean) {
         message.visibility = if (empty) View.VISIBLE else View.GONE
         if (empty) {
             val e = errors[t]
             message.text = when {
                 e == null -> ctx.getString(if (lists.containsKey(t) || t == Tab.FAVOURITES) R.string.lib_empty else R.string.tv_loading_title)
                 e.fail == GamehubTv.Fail.NOT_DEPLOYED -> ctx.getString(R.string.lib_update)
-                e.fail == GamehubTv.Fail.NOT_LINKED -> ctx.getString(R.string.inbox_link_body)
+                e.fail == GamehubTv.Fail.NOT_LINKED || e.fail == GamehubTv.Fail.UNAUTHORIZED -> ctx.getString(R.string.inbox_link_body)
                 else -> ctx.getString(R.string.tv_offline_body, e.message)
             }
         }
@@ -229,11 +274,9 @@ class LibraryPage(host: Host) : Page(host) {
             favLoading = false
             if (r is GamehubTv.Res.Ok) {
                 val ids = favs.mapTo(HashSet()) { it.id }
-                val start = favs.size
                 for (s in r.value.items) if (ids.add(s.id)) favs.add(s)
                 favNext = r.value.next
-                if (tab == Tab.FAVOURITES && favs.size > start) grid.adapter?.notifyItemRangeInserted(start, favs.size - start)
-                renderTabs()
+                if (tab == Tab.FAVOURITES) updateGrid() else renderTabs()
             }
         }
     }
@@ -249,6 +292,15 @@ class LibraryPage(host: Host) : Page(host) {
     }
 
     override fun onHide() { handler.removeCallbacksAndMessages(null) }
+
+    override fun releaseImages() {
+        for (k in 0 until grid.childCount) (grid.getChildAt(k) as? Tile)?.let { Img.release(it.image) }
+        grid.recycledViewPool.clear()
+    }
+
+    override fun restoreImages() {
+        grid.adapter?.let { it.notifyItemRangeChanged(0, it.itemCount) }
+    }
 }
 
 private fun View.setOnFocusChangeListenerChainedTv(extra: (Boolean) -> Unit) {

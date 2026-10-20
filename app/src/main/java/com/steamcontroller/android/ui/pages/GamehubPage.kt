@@ -180,6 +180,7 @@ class GamehubPage(host: Host) : Page(host) {
             if (result == null) {
                 Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.hub_linked_pill))
                 GamehubSync.kick(ctx)
+                com.steamcontroller.android.ui.tv.HomeRepo.reset(ctx)
                 linkedShown = null
                 renderLink()
                 focusFirst?.requestFocus()
@@ -198,6 +199,8 @@ class GamehubPage(host: Host) : Page(host) {
             .setMessage(R.string.hub_unlink_body)
             .setPositiveButton(R.string.hub_unlink) { _, _ ->
                 GamehubStore.clearLink(ctx)
+                // The TV's offline copies and images belong to that link: drop them too.
+                com.steamcontroller.android.ui.tv.HomeRepo.forget(ctx)
                 Pill.show(ctx, Pill.Kind.INFO, ctx.getString(R.string.hub_unlinked))
                 linkedShown = null
                 renderLink()

@@ -170,7 +170,10 @@ class InboxPage(host: Host) : Page(host) {
 
     override fun onShow() {
         if (!loaded) {
-            GamehubTv.cachedShots(ctx, "inbox")?.let { setItems(it.items) }
+            host.activity.lifecycleScope.launch {
+                val cached = withContext(Dispatchers.IO) { GamehubTv.cachedShots(ctx, "inbox") }
+                if (cached != null && !loaded) setItems(cached.items)
+            }
         }
         fetch()
     }
@@ -179,15 +182,53 @@ class InboxPage(host: Host) : Page(host) {
 
     private var fetching = false
 
+    // ── writes: one serial queue ──────────────────────────────────────────────────────
+    // Every triage change goes through one thread in order, so an undo always lands after the
+    // write it undoes. Ids with a write in flight are kept out of any list fetched meanwhile, and
+    // a list fetched while writes were queued is thrown away and asked for again once they are done.
+
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val inflight = HashMap<String, Int>()
+    private var pendingWrites = 0
+    private var writeGen = 0
+    private var refillWanted = false
+
+    private fun enqueue(ids: List<String>, work: () -> GamehubTv.Res<*>, done: (GamehubTv.Res<*>) -> Unit) {
+        pendingWrites++
+        writeGen++
+        for (id in ids) inflight[id] = (inflight[id] ?: 0) + 1
+        writer.execute {
+            val r: GamehubTv.Res<*> = try { work() } catch (e: Exception) { GamehubTv.Res.Err(GamehubTv.Fail.SERVER, e.message ?: "error") }
+            handler.post {
+                for (id in ids) { val n = (inflight[id] ?: 1) - 1; if (n <= 0) inflight.remove(id) else inflight[id] = n }
+                pendingWrites--
+                done(r)
+                if (pendingWrites == 0 && refillWanted) { refillWanted = false; fetch() }
+            }
+        }
+    }
+
     private fun fetch() {
+        // Never read the Inbox while our own changes are still on their way.
+        if (pendingWrites > 0) { refillWanted = true; return }
         if (fetching) return
         fetching = true
+        val gen = writeGen
         host.activity.lifecycleScope.launch {
             val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "inbox", limit = 120) }
             fetching = false
+            if (gen != writeGen) {
+                // A write started while this was loading: the answer may predate it.
+                if (pendingWrites > 0) refillWanted = true else fetch()
+                return@launch
+            }
             when (r) {
                 is GamehubTv.Res.Ok -> { problem = null; setItems(r.value.items) }
-                is GamehubTv.Res.Err -> { problem = r; if (!loaded) render() }
+                is GamehubTv.Res.Err -> {
+                    problem = r
+                    if (r.fail == GamehubTv.Fail.NOT_LINKED || r.fail == GamehubTv.Fail.UNAUTHORIZED) { groups.clear(); game = null; loaded = false; render() }
+                    else if (!loaded) render()
+                }
             }
         }
     }
@@ -196,7 +237,7 @@ class InboxPage(host: Host) : Page(host) {
         val keepGame = game
         val hadFocus = root.hasFocus()
         groups.clear()
-        for (s in items) if (s.status == null || s.status == "inbox") groups.getOrPut(s.game ?: UNNAMED) { ArrayList() }.add(s)
+        for (s in items) if ((s.status == null || s.status == "inbox") && s.id !in inflight) groups.getOrPut(s.game ?: UNNAMED) { ArrayList() }.add(s)
         loaded = true
         game = keepGame?.takeIf { groups.containsKey(it) } ?: groups.keys.firstOrNull()
         render()
@@ -214,7 +255,7 @@ class InboxPage(host: Host) : Page(host) {
             empty.visibility = View.VISIBLE
             val p = problem
             when {
-                p != null && p.fail == GamehubTv.Fail.NOT_LINKED -> emptyState(R.string.inbox_link_title, ctx.getString(R.string.inbox_link_body), R.string.tv_link_button) { host.go(PageId.GAMEHUB, focusContent = true) }
+                p != null && (p.fail == GamehubTv.Fail.NOT_LINKED || p.fail == GamehubTv.Fail.UNAUTHORIZED) -> emptyState(R.string.inbox_link_title, ctx.getString(R.string.inbox_link_body), R.string.tv_link_button) { host.go(PageId.GAMEHUB, focusContent = true) }
                 p != null && p.fail == GamehubTv.Fail.NOT_DEPLOYED -> emptyState(R.string.tv_update_title, ctx.getString(R.string.tv_update_body, p.message), R.string.tv_try_again) { fetch() }
                 p != null && !loaded -> emptyState(R.string.tv_offline_title, ctx.getString(R.string.tv_offline_body, p.message), R.string.tv_try_again) { fetch() }
                 !loaded -> emptyState(R.string.tv_loading_title, "", 0, null)
@@ -289,6 +330,13 @@ class InboxPage(host: Host) : Page(host) {
         render()
     }
 
+    override fun releaseImages() {
+        for (iv in listOf(imgA, imgB)) Img.release(iv)
+        for (k in 0 until nextRow.childCount) (nextRow.getChildAt(k) as? ImageView)?.let { Img.release(it) }
+    }
+
+    override fun restoreImages() { if (loaded) render() }
+
     private fun showImage(shot: Shot, fromDir: Int = 0) {
         val back = if (front === imgA) imgB else imgA
         val spec = Img.Spec(ctx.px(imgW))
@@ -355,10 +403,13 @@ class InboxPage(host: Host) : Page(host) {
         if (shots.isEmpty()) return
         for (s in shots) s.status = "kept"
         consume(g, shots, shots.map { it.favorite }, R.string.inbox_stamp_kept, C.success, -1)
-        host.activity.lifecycleScope.launch {
-            val r = withContext(Dispatchers.IO) { GamehubTv.keepAll(ctx, if (g == UNNAMED) null else g) }
+        enqueue(shots.map { it.id }, { GamehubTv.keepAll(ctx, if (g == UNNAMED) null else g) }) { r ->
             if (r is GamehubTv.Res.Err) Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.inbox_send_failed))
-            else Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.inbox_kept_all, shots.size, label(g)))
+            else {
+                // What the hub actually kept (it may know more than the page on screen).
+                val n = ((r as? GamehubTv.Res.Ok<*>)?.value as? Int)?.takeIf { it >= 0 } ?: shots.size
+                Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.inbox_kept_all, n, label(g)))
+            }
         }
     }
 
@@ -383,7 +434,8 @@ class InboxPage(host: Host) : Page(host) {
         if (!card.hasFocus() && !list.isEmpty() && view.hasFocus()) card.requestFocus()
     }
 
-    /** The first page may not have had everything: look again once the visible inbox is empty. */
+    /** The first page may not have had everything: look again once the visible Inbox is empty
+     *  (deferred by [fetch] until the write queue has drained). */
     private fun refillCheck() {
         fetch()
     }
@@ -406,8 +458,7 @@ class InboxPage(host: Host) : Page(host) {
     }
 
     private fun send(s: Shot, status: String, favorite: Boolean?) {
-        host.activity.lifecycleScope.launch {
-            val r = withContext(Dispatchers.IO) { GamehubTv.setShot(ctx, s.id, favorite = favorite, status = status) }
+        enqueue(listOf(s.id), { GamehubTv.setShot(ctx, s.id, favorite = favorite, status = status) }) { r ->
             if (r is GamehubTv.Res.Err) Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.inbox_send_failed))
         }
     }

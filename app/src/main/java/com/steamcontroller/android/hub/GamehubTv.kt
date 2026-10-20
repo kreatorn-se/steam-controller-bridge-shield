@@ -130,10 +130,11 @@ object GamehubTv {
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
-    /** [game] null keeps the unnamed captures. */
-    fun keepAll(c: Context, game: String?): Res<Unit> {
+    /** [game] null keeps the unnamed captures. Returns how many the hub kept. */
+    fun keepAll(c: Context, game: String?): Res<Int> {
         val r = send(c, "POST", "/api/device/v1/inbox/keep-all", JSONObject().put("game", game ?: JSONObject.NULL).toString())
-        return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
+        if (r !is Res.Ok) return r as Res.Err
+        return Res.Ok(runCatching { JSONObject(r.value).optInt("count", -1) }.getOrDefault(-1))
     }
 
     fun games(c: Context): Res<List<Coll>> = list(c, "games") { o -> collOf(o, "game") }
@@ -195,7 +196,8 @@ object GamehubTv {
      * never to another host (people's avatars come from Steam's CDN). False on any failure.
      */
     fun download(c: Context, url: String, dest: File): Boolean {
-        val tmp = File(dest.parentFile, dest.name + ".part")
+        // A unique temp file per download: two downloads can never write the same file.
+        var tmp: File? = null
         return try {
             val full = abs(c, url)
             val own = full.startsWith(base(c) + "/")
@@ -203,16 +205,28 @@ object GamehubTv {
             conn.readTimeout = 45_000
             conn.setRequestProperty("accept", "image/*")
             try {
-                if (conn.responseCode != 200) return false
-                conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it, 64 * 1024) } }
+                val status = conn.responseCode
+                if (own && status == 401) onUnauthorized(c)
+                if (status != 200) return false
+                val t = File.createTempFile(dest.name, ".part", dest.parentFile)
+                tmp = t
+                conn.inputStream.use { input -> t.outputStream().use { input.copyTo(it, 64 * 1024) } }
             } finally {
                 conn.disconnect()
             }
-            tmp.renameTo(dest)
+            val t = tmp ?: return false
+            if (t.renameTo(dest)) true else { t.delete(); dest.isFile }
         } catch (_: Throwable) {
-            tmp.delete()
+            tmp?.delete()
             false
         }
+    }
+
+    /** Called (on a worker thread) when the hub refuses the token: the TV forgets its copies. */
+    @Volatile var unauthorizedListener: ((Context) -> Unit)? = null
+
+    private fun onUnauthorized(c: Context) {
+        unauthorizedListener?.invoke(c.applicationContext)
     }
 
     // ── parsing ───────────────────────────────────────────────────────────────────────
@@ -368,7 +382,8 @@ object GamehubTv {
                     // Cloudflare Access is not letting /api/device/v1 through yet. Both: update Gamehub.
                     status == 404 && method == "GET" -> Res.Err(Fail.NOT_DEPLOYED, "HTTP 404")
                     status in 300..399 -> Res.Err(Fail.NOT_DEPLOYED, "HTTP $status (Access)")
-                    status == 401 || status == 403 -> Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status")
+                    status == 401 -> { onUnauthorized(c); Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status") }
+                    status == 403 -> Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status")
                     else -> Res.Err(Fail.SERVER, errorOf(text) ?: "HTTP $status")
                 }
             } finally {

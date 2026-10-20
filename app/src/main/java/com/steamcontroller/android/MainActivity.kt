@@ -128,6 +128,7 @@ class MainActivity : AppCompatActivity(), Host {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, true)
         Img.init(this)
+        HomeRepo.install()
         svc = ServiceControl(this) { ticker.invalidateSlow() }
         ticker = LiveTicker(this) { onFrame(it) }
         buildShell()
@@ -171,6 +172,28 @@ class MainActivity : AppCompatActivity(), Host {
         ControllerLive.releaseOutput()
         resumed = false
         super.onPause()
+    }
+
+    private var stopped = false
+
+    override fun onStart() {
+        super.onStart()
+        Img.setVisible(true)
+        if (stopped) {
+            stopped = false
+            pages[current]?.restoreImages()
+            show?.restoreImages()
+        }
+    }
+
+    // While a game runs (GeForce NOW) the process stays alive for the bridge's service on a
+    // 3 GB box: give back every bitmap until the UI is visible again.
+    override fun onStop() {
+        stopped = true
+        for (p in pages.values) p.releaseImages()
+        show?.releaseImages()
+        Img.setVisible(false)
+        super.onStop()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -443,7 +466,11 @@ class MainActivity : AppCompatActivity(), Host {
         setContentFocusBlocked(false)
         val back = focusBeforeShow
         focusBeforeShow = null
-        if (back != null && back.isAttachedToWindow && back.isShown) back.requestFocus() else focusPage()
+        if (pages[current]?.restoreFocus() != true) {
+            if (back != null && back.isAttachedToWindow && back.isShown) back.requestFocus() else focusPage()
+        }
+        // Favourites may have changed in show mode; Home updates in place.
+        HomeRepo.refresh(this, 0L)
     }
 
     override fun openQuickSwitch() = QuickSwitch.open(this)

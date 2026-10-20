@@ -79,6 +79,12 @@ abstract class Page(val host: Host) {
     open fun refresh() {}
     /** Hardware key routed while this page is current; true consumes. */
     open fun onKey(event: KeyEvent): Boolean = false
+    /** Show mode closed: put focus back where it was opened from; false lets the shell do it. */
+    open fun restoreFocus(): Boolean = false
+    /** The activity is no longer visible (a game is running): let go of image bitmaps. */
+    open fun releaseImages() {}
+    /** Visible again after [releaseImages]. */
+    open fun restoreImages() {}
     /** Where focus lands when the page is entered for the first time. */
     open val defaultFocus: View? get() = null
 }

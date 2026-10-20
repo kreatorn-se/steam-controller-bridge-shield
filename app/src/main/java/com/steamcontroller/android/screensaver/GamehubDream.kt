@@ -48,6 +48,7 @@ class GamehubDream : DreamService() {
     private var running = false
     private var w = 1920
     private var h = 1080
+    private val spec get() = Img.Spec(w, hw = false, deep = true)
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -100,12 +101,16 @@ class GamehubDream : DreamService() {
     override fun onDreamingStarted() {
         super.onDreamingStarted()
         running = true
+        Img.setVisible(true)
         load()
     }
 
     override fun onDreamingStopped() {
         running = false
         main.removeCallbacksAndMessages(null)
+        drift?.cancel()
+        for (iv in listOf(a, b)) iv.setImageDrawable(null)
+        Img.setVisible(false)
         super.onDreamingStopped()
     }
 
@@ -118,14 +123,21 @@ class GamehubDream : DreamService() {
 
     private fun load() {
         val app = applicationContext
-        // Cached first, so the first image is up within a second even offline.
-        val cfg0 = GamehubTv.cachedSaver(app)
-        val cached = (cfg0?.collection?.let { GamehubTv.cachedShots(app, it) } ?: GamehubTv.cachedShots(app, "favourites"))?.items.orEmpty()
-        if (cached.isNotEmpty()) start(cached, cfg0?.intervalSec ?: 20, cfg0?.shuffle ?: true)
-        else showIdle()
-        if (!GamehubStore.isLinked(app)) return
+        // Not linked (or unlinked since): only the drifting mark, never someone else's captures.
+        if (!GamehubStore.isLinked(app)) { showIdle(); return }
+        showIdle()
         io.execute {
-            val cfg = GamehubTv.screensaver(app).valueOrNull() ?: cfg0 ?: GamehubTv.Saver("favourites", 20, true)
+            // The saved copy first (read here, off the main thread), so the first image is up
+            // within a second even offline; then the hub's choice.
+            val cfg0 = GamehubTv.cachedSaver(app)
+            val cached = (cfg0?.collection?.let { GamehubTv.cachedShots(app, it) } ?: GamehubTv.cachedShots(app, "favourites"))?.items.orEmpty()
+            if (cached.isNotEmpty()) main.post { if (running && items.isEmpty()) start(cached, cfg0?.intervalSec ?: 20, cfg0?.shuffle ?: true) }
+            val r = GamehubTv.screensaver(app)
+            if (r is GamehubTv.Res.Err && (r.fail == GamehubTv.Fail.UNAUTHORIZED || r.fail == GamehubTv.Fail.NOT_LINKED)) {
+                main.post { items = emptyList(); main.removeCallbacksAndMessages(null); for (iv in listOf(a, b)) { iv.setImageDrawable(null); iv.alpha = 0f }; caption.alpha = 0f; showIdle() }
+                return@execute
+            }
+            val cfg = r.valueOrNull() ?: cfg0 ?: GamehubTv.Saver("favourites", 20, true)
             var list = collect(cfg.collection)
             if (list.isEmpty() && cfg.collection != "favourites") list = collect("favourites")
             if (list.isEmpty()) list = collect("recent")
@@ -162,9 +174,10 @@ class GamehubDream : DreamService() {
         if (!running || items.isEmpty()) return
         index = (index + 1) % items.size
         val shot = items[index]
-        // Software bitmaps: the dream window is not guaranteed to be hardware accelerated.
-        Img.load(shot.previewUrl, Img.Spec(w, hw = false)) { bmp -> if (running) show(shot, bmp) }
-        items.getOrNull((index + 1) % items.size)?.let { Img.prefetch(it.previewUrl, Img.Spec(w, hw = false)) }
+        // Software bitmaps (the dream window is not guaranteed to be hardware accelerated), in
+        // ARGB_8888: skies and gradients band visibly in RGB_565.
+        Img.load(shot.previewUrl, spec) { bmp -> if (running) show(shot, bmp) }
+        items.getOrNull((index + 1) % items.size)?.let { Img.prefetch(it.previewUrl, spec) }
     }
 
     private fun show(shot: GamehubTv.Shot, bmp: Bitmap?) {
@@ -198,6 +211,7 @@ class GamehubDream : DreamService() {
     }
 
     private fun showIdle() {
+        if (idle.alpha > 0f && items.isEmpty()) return
         idle.alpha = 0.5f
         val dx = w * 0.25f
         val dy = h * 0.2f

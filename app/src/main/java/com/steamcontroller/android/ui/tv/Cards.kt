@@ -278,6 +278,19 @@ class SimpleAdapter<T>(
 ) : RecyclerView.Adapter<SimpleAdapter.Holder>() {
     class Holder(v: View) : RecyclerView.ViewHolder(v)
 
+    /** Replaces the items with a diff, so views of unchanged items (and focus on them) stay. */
+    fun update(newItems: List<T>, id: (T) -> Any?, same: (T, T) -> Boolean) {
+        val old = items
+        val r = androidx.recyclerview.widget.DiffUtil.calculateDiff(object : androidx.recyclerview.widget.DiffUtil.Callback() {
+            override fun getOldListSize() = old.size
+            override fun getNewListSize() = newItems.size
+            override fun areItemsTheSame(o: Int, n: Int) = id(old[o]) == id(newItems[n])
+            override fun areContentsTheSame(o: Int, n: Int) = same(old[o], newItems[n])
+        })
+        items = newItems
+        r.dispatchUpdatesTo(this)
+    }
+
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = Holder(make(parent))
     override fun onBindViewHolder(holder: Holder, position: Int) = bind(holder.itemView, items[position], position)
