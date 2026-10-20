@@ -138,7 +138,7 @@ class LiveFrame {
         private set
     private var statusKey = 0
 
-    fun refill(ctx: Context, shizuku: Boolean, activeName: String?) {
+    fun refill(shizuku: Boolean, activeName: String?, transportBt: Boolean) {
         val snap = ControllerLive.snapshot.value
         val svc = ControllerService.serviceStateFlow.value
         state = snap.state ?: ControllerService.stateFlow.value
@@ -149,7 +149,7 @@ class LiveFrame {
         link = when {
             snap.link != ControllerLive.Link.NONE -> snap.link
             !connected -> ControllerLive.Link.NONE
-            Prefs.getTransport(ctx) == Transport.BLUETOOTH -> ControllerLive.Link.BLUETOOTH
+            transportBt -> ControllerLive.Link.BLUETOOTH
             else -> ControllerLive.Link.PUCK
         }
         battery = snap.batteryPercent ?: svc.batteryPercent
@@ -197,6 +197,7 @@ class LiveTicker(private val ctx: Context, private val onFrame: (LiveFrame) -> U
     private var slowAt = 0L
     private var shizuku = false
     private var activeName: String? = null
+    private var transportBt = false
 
     fun start() {
         if (running) return
@@ -225,10 +226,11 @@ class LiveTicker(private val ctx: Context, private val onFrame: (LiveFrame) -> U
             } catch (_: Throwable) {
                 false
             }
+            transportBt = Prefs.getTransport(ctx) == Transport.BLUETOOTH
             val id = Prefs.getActiveNamedProfileId(ctx)
             activeName = id?.let { pid -> Prefs.listNamedProfiles(ctx).firstOrNull { it.id == pid }?.name }
         }
-        frame.refill(ctx, shizuku, activeName)
+        frame.refill(shizuku, activeName, transportBt)
         onFrame(frame)
     }
 

@@ -124,7 +124,8 @@ class CalibrationActivity : AppCompatActivity() {
     private fun onFrame(f: LiveFrame) {
         val s = f.state
         haveState = s != null
-        status.text = if (s == null) getString(R.string.tune_needs_controller) else ""
+        val st = if (s == null) getString(R.string.tune_needs_controller) else ""
+        if (status.text.toString() != st) status.text = st
         if (s == null) return
         lastLeftX = s.leftJoyX.toInt(); lastLeftY = s.leftJoyY.toInt()
         lastRightX = s.rightJoyX.toInt(); lastRightY = s.rightJoyY.toInt()

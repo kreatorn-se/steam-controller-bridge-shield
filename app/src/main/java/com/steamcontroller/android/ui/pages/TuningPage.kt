@@ -58,6 +58,10 @@ class TuningPage(host: Host) : Page(host) {
     private val graph = CurveGraphView(ctx)
     private val gyroView = GyroView(ctx).apply { showReadout = false }
     private val gyroGraph = CurveGraphView(ctx).apply { xLabel = "Rate"; yLabel = "Aim"; bandLabel = null }
+    private val gyroStack = Kit.column(ctx).apply {
+        addView(gyroView, Kit.lp(h = 0, weight = 1.1f, ctx = ctx))
+        addView(gyroGraph, Kit.lp(h = 0, weight = 1f, t = 8, ctx = ctx))
+    }
     private val rows = ArrayList<SettingRow>()
     private var tab = 0
     private var presetRow: LinearLayout? = null
@@ -180,10 +184,7 @@ class TuningPage(host: Host) : Page(host) {
 
     private fun gyroTab() {
         previewTitle.text = ctx.getString(R.string.tune_gyro_preview)
-        val stack = Kit.column(ctx)
-        stack.addView(gyroView, Kit.lp(h = 0, weight = 1.1f, ctx = ctx))
-        stack.addView(gyroGraph, Kit.lp(h = 0, weight = 1f, t = 8, ctx = ctx))
-        previewBox.addView(stack, Kit.frame())
+        previewBox.addView(gyroStack, Kit.frame())
         val acts = GyroActivation.ALL.map { it.displayName }
         add(ToggleRow(ctx, ctx.getString(R.string.calib_gyro_enable), ctx.getString(R.string.tune_gyro_enable_hint),
             { Prefs.getGyroEnabled(ctx) }, { Prefs.setGyroEnabled(ctx, it) }))

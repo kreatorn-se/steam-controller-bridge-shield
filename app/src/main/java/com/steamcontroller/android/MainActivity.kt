@@ -285,8 +285,11 @@ class MainActivity : AppCompatActivity(), Host {
         if (!pageFrame.requestFocus(View.FOCUS_RIGHT)) rail.focusCurrent()
     }
 
+    private var focusBeforeSheet: View? = null
+
     override fun openSheet(sheet: Sheet) {
         closeSheet(immediate = true)
+        focusBeforeSheet = currentFocus
         this.sheet = sheet
         overlay.addView(sheet.root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentFocusBlocked(true)
@@ -301,6 +304,10 @@ class MainActivity : AppCompatActivity(), Host {
         sheet = null
         setContentFocusBlocked(false)
         if (immediate) overlay.removeView(s.root) else s.animateOut { overlay.removeView(s.root) }
+        // Back to where the sheet was opened from (a page may move it on in onClosed).
+        val back = focusBeforeSheet
+        focusBeforeSheet = null
+        if (back != null && back.isAttachedToWindow && back.isShown) back.requestFocus() else if (!immediate) focusPage()
         s.onClosed?.invoke()
     }
 
