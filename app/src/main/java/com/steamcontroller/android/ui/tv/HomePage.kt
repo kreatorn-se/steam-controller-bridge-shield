@@ -477,8 +477,13 @@ class HomePage(host: Host) : Page(host) {
     private fun rowLogo(v: RowView) {
         val game = v.row.shots.map { it.game }.distinct().singleOrNull()
         val url = GameArt.get(game)?.logo
-        if (url == null) { v.logo.visibility = View.GONE; return }
-        Img.into(v.logo, url, Img.Spec(ctx.dp(120), alpha = true)) { b -> v.logo.visibility = if (b != null) View.VISIBLE else View.GONE }
+        v.header.text = v.row.title
+        if (url == null || game == null) { v.logo.visibility = View.GONE; return }
+        Img.into(v.logo, url, Img.Spec(ctx.dp(120), alpha = true)) { b ->
+            v.logo.visibility = if (b != null) View.VISIBLE else View.GONE
+            // The logo names the game: "Last session · Elden Ring" becomes "Last session".
+            if (b != null) v.header.text = v.row.title.removeSuffix(" · $game").removeSuffix(" - $game")
+        }
     }
 
     private fun learnArt(h: GamehubTv.Home) {
@@ -535,7 +540,6 @@ class HomePage(host: Host) : Page(host) {
     private fun refreshRow(v: RowView, r: GamehubTv.Row) {
         v.row = r
         rowLogo(v)
-        v.header.text = r.title
         v.count.text = rowMeta(r)
         val a = v.list.adapter ?: return
         if (r.shots.isNotEmpty()) {
@@ -581,11 +585,10 @@ class HomePage(host: Host) : Page(host) {
         v.clipToPadding = false
         val head = Kit.row(ctx)
         head.addView(v.logo, LinearLayout.LayoutParams(ctx.dp(120), ctx.dp(22)).apply { marginEnd = ctx.dp(12) })
-        v.header.text = r.title
         head.addView(v.header)
-        rowLogo(v)
         v.count.text = rowMeta(r)
         head.addView(v.count, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(12) })
+        rowLogo(v)
         v.addView(head, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = left + ctx.dp(3) })
 
         val list = TvRecycler(ctx, TvRecycler.LOCK_RIGHT)
@@ -645,8 +648,8 @@ class HomePage(host: Host) : Page(host) {
     }
 
     internal enum class TileKind(val w: Int, val h: Int, val captionOnFocus: Boolean, val circle: Boolean) {
-        SHOT(232, 130, true, false),
-        WIDE(232, 130, false, false),
+        SHOT(208, 117, true, false),
+        WIDE(208, 117, false, false),
         GAME(120, 180, true, false),
         PERSON(112, 112, false, true),
     }
