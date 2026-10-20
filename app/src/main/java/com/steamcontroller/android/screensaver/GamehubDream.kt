@@ -44,7 +44,7 @@ class GamehubDream : DreamService() {
     private var drift: android.animation.Animator? = null
     private var items: List<GamehubTv.Shot> = emptyList()
     private var index = -1
-    private var intervalMs = 12_000L
+    private var intervalMs = 20_000L
     private var running = false
     private var w = 1920
     private var h = 1080
@@ -121,11 +121,11 @@ class GamehubDream : DreamService() {
         // Cached first, so the first image is up within a second even offline.
         val cfg0 = GamehubTv.cachedSaver(app)
         val cached = (cfg0?.collection?.let { GamehubTv.cachedShots(app, it) } ?: GamehubTv.cachedShots(app, "favourites"))?.items.orEmpty()
-        if (cached.isNotEmpty()) start(cached, cfg0?.intervalSec ?: 12, cfg0?.shuffle ?: true)
+        if (cached.isNotEmpty()) start(cached, cfg0?.intervalSec ?: 20, cfg0?.shuffle ?: true)
         else showIdle()
         if (!GamehubStore.isLinked(app)) return
         io.execute {
-            val cfg = GamehubTv.screensaver(app).valueOrNull() ?: cfg0 ?: GamehubTv.Saver("favourites", 12, true)
+            val cfg = GamehubTv.screensaver(app).valueOrNull() ?: cfg0 ?: GamehubTv.Saver("favourites", 20, true)
             var list = collect(cfg.collection)
             if (list.isEmpty() && cfg.collection != "favourites") list = collect("favourites")
             if (list.isEmpty()) list = collect("recent")

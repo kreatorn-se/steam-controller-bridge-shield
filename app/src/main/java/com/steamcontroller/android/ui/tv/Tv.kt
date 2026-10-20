@@ -13,7 +13,8 @@ import java.util.Locale
 object TvPrefs {
     private fun p(c: Context) = c.getSharedPreferences("tv", Context.MODE_PRIVATE)
 
-    val INTERVALS = intArrayOf(5, 8, 12, 20, 30, 60)
+    /** Time per picture, as on the web slideshow. */
+    val INTERVALS = intArrayOf(3, 5, 8, 12, 20, 30, 60)
 
     fun interval(c: Context): Int = p(c).getInt("interval", 8)
     fun setInterval(c: Context, s: Int) = p(c).edit().putInt("interval", s).apply()

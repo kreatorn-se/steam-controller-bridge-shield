@@ -209,6 +209,10 @@ class LibraryPage(host: Host) : Page(host) {
                 tile.setOver(if (art == null) c.title else null)
                 tile.setCaption(c.title, Fmt.count(c.count))
             }
+            Tab.PEOPLE -> {
+                Img.into(tile.image, c.avatar ?: c.cover?.previewUrl, spec)
+                tile.setCaption(c.title, if (c.count > 0) Fmt.count(c.count) else c.subtitle)
+            }
             else -> {
                 Img.into(tile.image, c.cover?.previewUrl, spec)
                 tile.setCaption(c.title, if (c.count > 0) Fmt.count(c.count) else c.subtitle)

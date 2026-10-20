@@ -181,7 +181,7 @@ class InboxPage(host: Host) : Page(host) {
         if (fetching) return
         fetching = true
         host.activity.lifecycleScope.launch {
-            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "inbox", limit = 200) }
+            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "inbox", limit = 120) }
             fetching = false
             when (r) {
                 is GamehubTv.Res.Ok -> { problem = null; setItems(r.value.items) }
@@ -194,7 +194,7 @@ class InboxPage(host: Host) : Page(host) {
         val keepGame = game
         val hadFocus = root.hasFocus()
         groups.clear()
-        for (s in items) if (s.status == null || s.status == "inbox") groups.getOrPut(s.gameOrUnknown()) { ArrayList() }.add(s)
+        for (s in items) if (s.status == null || s.status == "inbox") groups.getOrPut(s.game ?: UNNAMED) { ArrayList() }.add(s)
         loaded = true
         game = keepGame?.takeIf { groups.containsKey(it) } ?: groups.keys.firstOrNull()
         render()
@@ -223,7 +223,7 @@ class InboxPage(host: Host) : Page(host) {
         empty.visibility = View.GONE
         content.visibility = View.VISIBLE
         val shot = shots[0]
-        title.text = g
+        title.text = label(g)
         val sources = shots.mapNotNull { it.source }.distinct()
         sub.text = (if (sources.size == 1) sources[0].uppercase() + "  ·  " else "") + ctx.getString(R.string.inbox_left, shots.size)
         allBtn.text = ctx.getString(R.string.inbox_keep_all, shots.size)
@@ -270,7 +270,7 @@ class InboxPage(host: Host) : Page(host) {
         minimumHeight = ctx.dp(46)
         setPadding(ctx.dp(15), 0, ctx.dp(15), 0)
         surface(radiusDp = 8f, fill = 0, stroke = 0, focusable = true, activeFill = C.surface2, scale = 1.02f)
-        val name = Kit.body(ctx, g, 15f, C.text2, medium = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val name = Kit.body(ctx, label(g), 15f, C.text2, medium = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         addView(Kit.value(ctx, "", 13f, C.text3), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(8) })
         setOnClickListener { selectGame(g); card.requestFocus() }
@@ -354,9 +354,9 @@ class InboxPage(host: Host) : Page(host) {
         for (s in shots) s.status = "kept"
         consume(g, shots, shots.map { it.favorite }, R.string.inbox_stamp_kept, C.success, -1)
         host.activity.lifecycleScope.launch {
-            val r = withContext(Dispatchers.IO) { GamehubTv.keepAll(ctx, g) }
+            val r = withContext(Dispatchers.IO) { GamehubTv.keepAll(ctx, if (g == UNNAMED) null else g) }
             if (r is GamehubTv.Res.Err) Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.inbox_send_failed))
-            else Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.inbox_kept_all, shots.size, g))
+            else Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.inbox_kept_all, shots.size, label(g)))
         }
     }
 
@@ -421,6 +421,13 @@ class InboxPage(host: Host) : Page(host) {
         stamp.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.BASE).setInterpolator(android.view.animation.OvershootInterpolator(2f)).withEndAction {
             stamp.animate().alpha(0f).setStartDelay(650L).setDuration(300L).withEndAction { stamp.animate().setStartDelay(0) }.start()
         }.start()
+    }
+
+    private fun label(g: String) = if (g == UNNAMED) ctx.getString(R.string.inbox_unnamed) else g
+
+    private companion object {
+        /** Group key for captures without a game ("__none__" in the API). */
+        const val UNNAMED = "\u0000unnamed"
     }
 
     // ── keys ──────────────────────────────────────────────────────────────────────────

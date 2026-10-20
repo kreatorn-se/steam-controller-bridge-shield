@@ -46,7 +46,7 @@ class HomePage(host: Host) : Page(host) {
     private val safeH = res.getDimensionPixelSize(R.dimen.safe_h)
     private val safeV = res.getDimensionPixelSize(R.dimen.safe_v)
     private val left = safeH + ctx.dp(64 + 8)
-    private val heroH = (screenH * 0.64f).toInt()
+    private val heroH = (screenH * 0.70f).toInt()
     private val keylineTop = safeV + ctx.dp(48 + 14)
 
     private val root = FrameLayout(ctx)
@@ -61,7 +61,7 @@ class HomePage(host: Host) : Page(host) {
     private val heroText = LinearLayout(ctx)
     private val eyebrow = Kit.label(ctx, "", 12f, C.text2)
     private val logo = ImageView(ctx)
-    private val heroTitle = Kit.title(ctx, "", 46f)
+    private val heroTitle = Kit.title(ctx, "", 44f)
     private val heroMeta = Kit.body(ctx, "", 16f, C.text2)
     private val buttons = Kit.row(ctx)
     private val playBtn = Kit.button(ctx, ctx.getString(R.string.tv_play_show), Kit.Btn.PRIMARY, R.drawable.ic_play) { playHero() }
@@ -128,20 +128,20 @@ class HomePage(host: Host) : Page(host) {
         heroText.addView(eyebrow)
         logo.scaleType = ImageView.ScaleType.FIT_START
         logo.adjustViewBounds = false
-        heroText.addView(logo, LinearLayout.LayoutParams(ctx.dp(380), ctx.dp(104)).apply { topMargin = ctx.dp(14) })
+        heroText.addView(logo, LinearLayout.LayoutParams(ctx.dp(340), ctx.dp(84)).apply { topMargin = ctx.dp(12) })
         heroTitle.maxLines = 2
         heroTitle.setShadowLayer(ctx.dp(12f), 0f, 0f, C.alpha(C.bg, 0.6f))
-        heroText.addView(heroTitle, LinearLayout.LayoutParams(ctx.dp(520), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(12) })
+        heroText.addView(heroTitle, LinearLayout.LayoutParams(ctx.dp(520), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(10) })
         heroMeta.maxLines = 2
-        heroText.addView(heroMeta, LinearLayout.LayoutParams(ctx.dp(520), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(12) })
+        heroText.addView(heroMeta, LinearLayout.LayoutParams(ctx.dp(520), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(10) })
         buttons.clipChildren = false
         buttons.addView(playBtn)
         buttons.addView(favBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(6) })
-        heroText.addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(22); marginStart = -ctx.dp(3) })
+        heroText.addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(20); marginStart = -ctx.dp(3) })
         val foot = Kit.row(ctx)
         foot.addView(dots)
         foot.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(14) })
-        heroText.addView(foot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ctx.dp(20)).apply { topMargin = ctx.dp(16) })
+        heroText.addView(foot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ctx.dp(20)).apply { topMargin = ctx.dp(14) })
         heroBlock.addView(heroText, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START).apply {
             marginStart = left
             bottomMargin = ctx.dp(18)
@@ -150,7 +150,7 @@ class HomePage(host: Host) : Page(host) {
         nowCard.setOnClickListener { home?.nowPlaying?.let { playGame(it.game) } }
         heroBlock.addView(nowCard, FrameLayout.LayoutParams(ctx.dp(NowPlayingCard.W + 6), ctx.dp(NowPlayingCard.H + 6), Gravity.BOTTOM or Gravity.END).apply {
             marginEnd = safeH - ctx.dp(3)
-            bottomMargin = ctx.dp(18 + 36 - 3)
+            bottomMargin = ctx.dp(18 + 14 + 20 - 3)
         })
     }
 
@@ -351,7 +351,7 @@ class HomePage(host: Host) : Page(host) {
             if (logoUrl != null) {
                 logo.visibility = View.VISIBLE
                 heroTitle.visibility = View.GONE
-                Img.into(logo, logoUrl, Img.Spec(ctx.dp(380), alpha = true)) { bmp ->
+                Img.into(logo, logoUrl, Img.Spec(ctx.dp(340), alpha = true)) { bmp ->
                     if (bmp == null && heroList.getOrNull(heroIndex)?.id == shot.id) { logo.visibility = View.GONE; heroTitle.visibility = View.VISIBLE }
                 }
             } else {
@@ -531,6 +531,10 @@ class HomePage(host: Host) : Page(host) {
                 Img.into(t.image, grid ?: c.cover?.previewUrl, if (grid != null) spec else Img.Spec(ctx.px(kind.h * 16 / 9)))
                 t.setOver(if (grid == null) c.title else null)
                 t.setCaption(c.title, Fmt.count(c.count))
+            }
+            TileKind.PERSON -> {
+                Img.into(t.image, c.avatar ?: c.cover?.previewUrl, spec)
+                t.setCaption(c.title, if (c.count > 0) Fmt.count(c.count) else c.subtitle)
             }
             else -> {
                 Img.into(t.image, c.cover?.previewUrl, spec)

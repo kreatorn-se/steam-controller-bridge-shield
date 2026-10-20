@@ -406,6 +406,7 @@
     <string name="inbox_send_failed">Inbox change not saved</string>
     <string name="inbox_clear_title">All sorted</string>
     <string name="inbox_clear_body">Imports from Steam, the Deck and other sources land here to be kept or skipped.</string>
+    <string name="inbox_unnamed">Unnamed</string>
     <string name="inbox_link_title">Link Gamehub first</string>
     <string name="inbox_link_body">Link this Shield to Gamehub under Settings → Hub link.</string>
 

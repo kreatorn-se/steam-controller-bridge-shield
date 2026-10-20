@@ -56,6 +56,8 @@ object GamehubTv {
         val cover: Shot?,
         val art: Art?,
         val subtitle: String?,
+        /** A person's picture (public Steam CDN URL), when there is one. */
+        val avatar: String? = null,
     )
 
     data class Row(
@@ -128,8 +130,9 @@ object GamehubTv {
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
-    fun keepAll(c: Context, game: String): Res<Unit> {
-        val r = send(c, "POST", "/api/device/v1/inbox/keep-all", JSONObject().put("game", game).toString())
+    /** [game] null keeps the unnamed captures. */
+    fun keepAll(c: Context, game: String?): Res<Unit> {
+        val r = send(c, "POST", "/api/device/v1/inbox/keep-all", JSONObject().put("game", game ?: JSONObject.NULL).toString())
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
@@ -157,7 +160,7 @@ object GamehubTv {
 
     private fun parseSaver(o: JSONObject) = Saver(
         collection = o.optString("collection").ifBlank { "favourites" },
-        intervalSec = o.optInt("intervalSec", 12).coerceIn(4, 600),
+        intervalSec = o.optInt("intervalSec", 20).coerceIn(5, 600),
         shuffle = o.optBoolean("shuffle", true),
     )
 
@@ -187,11 +190,16 @@ object GamehubTv {
     fun abs(c: Context, url: String): String =
         if (url.startsWith("http://") || url.startsWith("https://")) url else base(c) + (if (url.startsWith("/")) url else "/$url")
 
-    /** Streams [url] (relative or absolute) to [dest] with the device token. False on any failure. */
+    /**
+     * Streams [url] (relative or absolute) to [dest]. The device token goes only to the hub itself,
+     * never to another host (people's avatars come from Steam's CDN). False on any failure.
+     */
     fun download(c: Context, url: String, dest: File): Boolean {
         val tmp = File(dest.parentFile, dest.name + ".part")
         return try {
-            val conn = open(c, "GET", abs(c, url)) ?: return false
+            val full = abs(c, url)
+            val own = full.startsWith(base(c) + "/")
+            val conn = (if (own) open(c, "GET", full) else openPublic(full)) ?: return false
             conn.readTimeout = 45_000
             conn.setRequestProperty("accept", "image/*")
             try {
@@ -274,6 +282,7 @@ object GamehubTv {
             cover = cover,
             art = artOf(o.optJSONObject("art")) ?: cover?.art,
             subtitle = str(o, "subtitle"),
+            avatar = str(o, "avatar"),
         )
     }
 
@@ -382,6 +391,15 @@ object GamehubTv {
         conn.setRequestProperty("x-app-version", BuildConfig.VERSION_NAME)
         conn.setRequestProperty("accept", "application/json")
         conn.setRequestProperty("authorization", "Bearer $token")
+        return conn
+    }
+
+    private fun openPublic(url: String): HttpURLConnection? {
+        if (!url.startsWith("https://")) return null
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 20_000
+        conn.instanceFollowRedirects = true
         return conn
     }
 
