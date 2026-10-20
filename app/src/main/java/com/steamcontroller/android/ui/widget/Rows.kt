@@ -112,13 +112,15 @@ class StepperRow(
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT -> { nudge(-1, event.repeatCount); true }
-        KeyEvent.KEYCODE_DPAD_RIGHT -> { nudge(1, event.repeatCount); true }
+        // At either end a fresh press lets focus leave (a held key never does, so a repeat that
+        // reaches the limit cannot jump to the rail).
+        KeyEvent.KEYCODE_DPAD_LEFT -> if (value <= min + step / 2 && event.repeatCount == 0) false else { nudge(-1, event.repeatCount); true }
+        KeyEvent.KEYCODE_DPAD_RIGHT -> if (value >= max - step / 2 && event.repeatCount == 0) false else { nudge(1, event.repeatCount); true }
         else -> super.onKeyDown(keyCode, event)
     }
 }
 
-/** A list of options cycled with ←/→ or select. */
+/** A list of options cycled with select (←/→ stay free for navigation; the arrows are touch targets). */
 class ChoiceRow(
     ctx: Context,
     title: CharSequence,
@@ -152,14 +154,9 @@ class ChoiceRow(
         playSoundEffect(if (d < 0) SoundEffectConstants.NAVIGATION_LEFT else SoundEffectConstants.NAVIGATION_RIGHT)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.repeatCount == 0) move(-1); true }
-        KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.repeatCount == 0) move(1); true }
-        else -> super.onKeyDown(keyCode, event)
-    }
 }
 
-/** On/off. Select toggles; ←/→ set off/on directly. */
+/** On/off. Select toggles. */
 class ToggleRow(
     ctx: Context,
     title: CharSequence,
@@ -187,11 +184,6 @@ class ToggleRow(
         onChange?.invoke(v)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT -> { apply(false); true }
-        KeyEvent.KEYCODE_DPAD_RIGHT -> { apply(true); true }
-        else -> super.onKeyDown(keyCode, event)
-    }
 }
 
 /** A row that does something: trailing value text (optional) and a chevron. */

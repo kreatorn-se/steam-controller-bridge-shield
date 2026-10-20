@@ -126,6 +126,7 @@ class LiveFrame {
     var padUp = false
     var shizukuReady = false
     var profileName: String? = null
+    var profileId: String? = null
     var reportRate = 0
     var mode: ControllerService.InjectionMode = ControllerService.InjectionMode.NONE
     var backend = 0
@@ -138,7 +139,7 @@ class LiveFrame {
         private set
     private var statusKey = 0
 
-    fun refill(shizuku: Boolean, activeName: String?, transportBt: Boolean) {
+    fun refill(shizuku: Boolean, activeName: String?, activeId: String?, transportBt: Boolean) {
         val snap = ControllerLive.snapshot.value
         val svc = ControllerService.serviceStateFlow.value
         state = snap.state ?: ControllerService.stateFlow.value
@@ -158,6 +159,7 @@ class LiveFrame {
         padUp = snap.virtualPadUp || svc.mode.isVirtualDevice
         shizukuReady = snap.shizukuReady || shizuku
         profileName = snap.activeProfileName ?: activeName
+        profileId = snap.activeProfileId ?: activeId
         reportRate = max(snap.reportRate, svc.reportRateHz)
         backend = svc.backend
         backendDetail = svc.backendDetail
@@ -197,6 +199,7 @@ class LiveTicker(private val ctx: Context, private val onFrame: (LiveFrame) -> U
     private var slowAt = 0L
     private var shizuku = false
     private var activeName: String? = null
+    private var activeId: String? = null
     private var transportBt = false
 
     fun start() {
@@ -228,9 +231,10 @@ class LiveTicker(private val ctx: Context, private val onFrame: (LiveFrame) -> U
             }
             transportBt = Prefs.getTransport(ctx) == Transport.BLUETOOTH
             val id = Prefs.getActiveNamedProfileId(ctx)
+            activeId = id
             activeName = id?.let { pid -> Prefs.listNamedProfiles(ctx).firstOrNull { it.id == pid }?.name }
         }
-        frame.refill(shizuku, activeName, transportBt)
+        frame.refill(shizuku, activeName, activeId, transportBt)
         onFrame(frame)
     }
 

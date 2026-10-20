@@ -288,9 +288,13 @@ class Sheet(ctx: Context, widthDp: Int = 400) {
 
     /** First focusable in the body, or the given view. */
     fun focus(v: View?) {
-        val target = v ?: FocusFinder.getInstance().findNextFocus(body, null, View.FOCUS_DOWN)
-        target?.requestFocus()
-        if (target != null) panel.remembered = target
+        // No geometry yet (called right after attaching), so walk the tree rather than FocusFinder.
+        val target = if (v != null && v.requestFocus()) v else body.takeIf { it.requestFocus(View.FOCUS_DOWN) }?.findFocus()
+        if (target != null) {
+            panel.remembered = target
+        } else {
+            body.post { body.requestFocus(View.FOCUS_DOWN); body.findFocus()?.let { panel.remembered = it } }
+        }
     }
 }
 

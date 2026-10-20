@@ -421,7 +421,15 @@ object Prefs {
     ): XboxTarget {
         val key = mapKey(prefix, source)
         val default = defaults[source] ?: XboxTarget.NONE
-        val stored = prefs(context).all[key]
+        val p = prefs(context)
+        if (!p.contains(key)) return default
+        // Read just this key (not a copy of the whole map). Releases that persisted ordinals
+        // stored an Int here; current ones store the enum name.
+        val stored: Any? = try {
+            p.getString(key, null)
+        } catch (_: ClassCastException) {
+            try { p.getInt(key, 0) } catch (_: ClassCastException) { null }
+        }
         val target = XboxTarget.fromPersisted(stored) ?: default
         if (stored != null && stored != target.name) {
             prefs(context).edit().putString(key, target.name).apply()

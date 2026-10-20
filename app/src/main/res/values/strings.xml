@@ -54,7 +54,7 @@
     <string name="ctl_keys">A  Edit      B  Back</string>
     <string name="ctl_hint">Select a callout, or press a button on the controller to jump to it</string>
     <string name="ctl_hint_inactive">%1$s mappings apply when the bridge emulates that mode · change it on Device</string>
-    <string name="ctl_hint_layer">Hold %1$s for the action layer · it remaps the back paddles while held</string>
+    <string name="ctl_hint_layer">Hold %1$s for the action layer · any button can do something else while it is held</string>
     <string name="ctl_hint_layer_none">Map a button to “layer on hold” to use the action layer</string>
     <string name="ctl_sheet_eyebrow">Remap · %1$s</string>
     <string name="ctl_sheet_live">Applies immediately</string>
@@ -64,6 +64,8 @@
     <string name="ctl_current">Current</string>
     <string name="ctl_default">Default</string>
     <string name="ctl_restore_default">Restore default · %1$s</string>
+    <string name="dev_bt_allow">Allow Bluetooth access</string>
+    <string name="dev_bt_allow_hint">Needed to list the paired Steam Controller</string>
     <string name="ctl_info_dpad">The D-pad is always the D-pad in gamepad mode and the arrow keys in desktop mode, so it can move focus anywhere on the TV.</string>
     <string name="ctl_info_lpad">The left trackpad scrolls, and its click is a right click. Speed and acceleration are on the Tuning page; you can switch the trackpads off for gamepad mode there.</string>
     <string name="ctl_info_rpad">The right trackpad moves the pointer, and its click is a left click. It can also wake gyro aiming. Speed and acceleration are on the Tuning page.</string>

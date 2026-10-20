@@ -3,7 +3,9 @@ package com.steamcontroller.android
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
+import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -74,6 +76,31 @@ class MainActivity : AppCompatActivity(), Host {
     private lateinit var hubChip: StripChip
     private var statusSeen = -1
     private var hubCheckedAt = 0L
+    private var lastProfileKey: String? = null
+
+    // Stick → D-pad synthesis: the framework turns the virtual pad's left stick into repeating
+    // D-pad keys, which would nudge the focused stepper while you watch a live stick read-out.
+    // Stick motion is consumed app-wide; D-pad (hat) changes still pass so navigation works, and
+    // once a passed event carried a deflected stick, events keep passing until it re-centres so
+    // the synthesised key is always released.
+    private var hatX = 0f
+    private var hatY = 0f
+    private var stickLeaked = false
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) {
+            val hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X)
+            val hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
+            val hatChanged = hx != hatX || hy != hatY
+            hatX = hx; hatY = hy
+            if (hatChanged || stickLeaked) {
+                stickLeaked = kotlin.math.abs(ev.getAxisValue(MotionEvent.AXIS_X)) > 0.1f || kotlin.math.abs(ev.getAxisValue(MotionEvent.AXIS_Y)) > 0.1f
+                return super.dispatchGenericMotionEvent(ev)
+            }
+            return true
+        }
+        return super.dispatchGenericMotionEvent(ev)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -240,6 +267,14 @@ class MainActivity : AppCompatActivity(), Host {
     }
 
     private fun onFrame(f: LiveFrame) {
+        // The service can switch profile by itself (Steam + D-pad chord, foreground auto-switch);
+        // every page re-reads its settings when that happens.
+        val profileKey = (f.profileId ?: "") + "|" + (f.profileName ?: "")
+        if (profileKey != lastProfileKey) {
+            val first = lastProfileKey == null
+            lastProfileKey = profileKey
+            if (!first) refreshAll()
+        }
         if (f.statusVersion != statusSeen) {
             statusSeen = f.statusVersion
             renderStrip(f)

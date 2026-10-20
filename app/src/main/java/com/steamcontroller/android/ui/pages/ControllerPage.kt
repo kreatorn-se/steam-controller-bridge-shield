@@ -73,6 +73,7 @@ class ControllerPage(host: Host) : Page(host) {
     private var armedAt = 0L
     private var lastSuppress = 0L
     private var captured = -1
+    private var shownSecs = -1
 
     init {
         diagram.listener = object : ControllerDiagramView.Listener {
@@ -239,7 +240,8 @@ class ControllerPage(host: Host) : Page(host) {
             sheet.body.addView(ListRow(ctx, Names.full(current), Names.hint(current), tag = ctx.getString(R.string.ctl_current), current = true) { host.closeSheet() })
         } else {
             if (current != def) {
-                sheet.body.addView(ListRow(ctx, ctx.getString(R.string.ctl_restore_default, Names.full(def)), null, tag = null) { pick(button, def) })
+                val defName = if (layer == Layer.ACTION && def == XboxTarget.NONE) ctx.getString(R.string.ctl_action_passthrough) else Names.full(def)
+                sheet.body.addView(ListRow(ctx, ctx.getString(R.string.ctl_restore_default, defName), null, tag = null) { pick(button, def) })
             }
             for (g in Mappings.groups(layer)) {
                 sheet.body.addView(Kit.section(ctx, g.title, if (sheet.body.childCount == 0) 4 else 18))
@@ -310,6 +312,7 @@ class ControllerPage(host: Host) : Page(host) {
             return
         }
         capture = Capture.ARMED
+        shownSecs = -1
         armedAt = SystemClock.uptimeMillis()
         lastSuppress = 0L
         Ctl.levels(host.frame.state, levels)
@@ -342,7 +345,8 @@ class ControllerPage(host: Host) : Page(host) {
                 if (now - lastSuppress >= 1000L) { ControllerLive.suppressOutput(1500L); lastSuppress = now }
                 val left = IDENTIFY_MS - (now - armedAt)
                 ring.set(left / IDENTIFY_MS.toFloat())
-                countdown.text = ctx.getString(R.string.ctl_identify_count, ((left + 999) / 1000).toInt().coerceAtLeast(0))
+                val secs = ((left + 999) / 1000).toInt().coerceAtLeast(0)
+                if (secs != shownSecs) { shownSecs = secs; countdown.text = ctx.getString(R.string.ctl_identify_count, secs) }
                 val hit = edges.rising(levels, EdgeDetector.ANY)
                 when {
                     hit >= 0 -> { captured = hit; capture = Capture.WAIT_RELEASE; armedAt = now }

@@ -205,13 +205,16 @@ class DevicePage(host: Host) : Page(host) {
     override fun onHide() { shown = false }
 
     /** Bluetooth: the paired controller to use (after the permission prompt on Android 12+). */
-    private fun renderBt() {
+    private fun renderBt(explicit: Boolean = false) {
         btBox.removeAllViews()
         btRow = null
         if (Prefs.getTransport(ctx) != Transport.BLUETOOTH) return
         // Only ask for the Bluetooth permission while this page is on screen.
         if (!shown) return
-        host.service.withBluetooth {
+        host.service.withBluetooth(explicit, denied = {
+            btBox.removeAllViews()
+            btBox.addView(ActionRow(ctx, ctx.getString(R.string.dev_bt_allow), ctx.getString(R.string.dev_bt_allow_hint)) { renderBt(explicit = true) })
+        }) {
             btBox.removeAllViews()
             val list = host.service.pairedControllers()
             bt = list ?: emptyList()

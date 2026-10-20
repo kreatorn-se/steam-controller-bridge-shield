@@ -145,9 +145,13 @@ class CurveGraphView(context: Context) : View(context) {
     private val label = labelPaint(context, 10f)
     private val num = numberPaint(context, 13f, C.text2).apply { textAlign = Paint.Align.RIGHT }
     private val sb = StringBuilder(16)
-    var xLabel = "Input"
-    var yLabel = "Output"
-    var bandLabel: String? = "Deadzone"
+    // Labels are drawn in capitals; converted once here, not per frame.
+    var xLabel = "INPUT"
+        set(v) { field = v.uppercase() }
+    var yLabel = "OUTPUT"
+        set(v) { field = v.uppercase() }
+    var bandLabel: String? = "DEADZONE"
+        set(v) { field = v?.uppercase() }
 
     /** [f] maps 0..1 → 0..1; [lo]/[hi] are the shaded dead bands at either end. */
     fun setCurve(lo: Float, hi: Float, f: (Float) -> Float) {
@@ -215,16 +219,16 @@ class CurveGraphView(context: Context) : View(context) {
         label.textAlign = Paint.Align.LEFT
         c.drawText("0", r.left - 4f * d, r.bottom + 18f * d, label)
         label.textAlign = Paint.Align.RIGHT
-        c.drawText(xLabel.uppercase(), r.right, r.bottom + 18f * d, label)
+        c.drawText(xLabel, r.right, r.bottom + 18f * d, label)
         c.drawText("100", r.left - 8f * d, r.top + 8f * d, label)
         c.save(); c.rotate(-90f, r.left - 24f * d, r.centerY())
         label.textAlign = Paint.Align.CENTER
-        c.drawText(yLabel.uppercase(), r.left - 24f * d, r.centerY() + 4f * d, label)
+        c.drawText(yLabel, r.left - 24f * d, r.centerY() + 4f * d, label)
         c.restore()
         if (bandLo > 0.06f && bandLabel != null) {
             label.textAlign = Paint.Align.LEFT
             c.save(); c.rotate(-90f, r.left + 12f * d, r.bottom - 6f * d)
-            c.drawText(bandLabel!!.uppercase(), r.left + 12f * d, r.bottom - 6f * d, label)
+            c.drawText(bandLabel!!, r.left + 12f * d, r.bottom - 6f * d, label)
             c.restore()
         }
         if (live >= 0f) {

@@ -46,6 +46,8 @@ class ServiceControl(private val activity: AppCompatActivity, private val onChan
         private set
 
     private var onBtReady: (() -> Unit)? = null
+    private var onBtDenied: (() -> Unit)? = null
+    private var btAsked = false
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -293,21 +295,34 @@ class ServiceControl(private val activity: AppCompatActivity, private val onChan
 
     class BtDevice(val address: String, val name: String)
 
-    /** Paired Steam Controllers, after asking for the Bluetooth permissions if needed. */
-    fun withBluetooth(then: () -> Unit) {
+    /**
+     * Runs [then] once the Bluetooth permissions are granted. Without them it asks at most once
+     * per session on its own (a denial would otherwise re-prompt on every resume), and again only
+     * when [explicit]; otherwise [denied] runs so the caller can offer a button.
+     */
+    fun withBluetooth(explicit: Boolean, denied: () -> Unit, then: () -> Unit) {
         val needed = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) needed += Manifest.permission.BLUETOOTH_CONNECT
             if (activity.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) needed += Manifest.permission.BLUETOOTH_SCAN
         }
-        if (needed.isEmpty()) then() else { onBtReady = then; activity.requestPermissions(needed.toTypedArray(), btPermissionRequest) }
+        when {
+            needed.isEmpty() -> then()
+            btAsked && !explicit -> denied()
+            else -> {
+                btAsked = true
+                onBtReady = then
+                onBtDenied = denied
+                activity.requestPermissions(needed.toTypedArray(), btPermissionRequest)
+            }
+        }
     }
 
     fun onPermissionsResult(requestCode: Int, grants: IntArray) {
-        if (requestCode == btPermissionRequest && grants.isNotEmpty() && grants.all { it == PackageManager.PERMISSION_GRANTED }) {
-            onBtReady?.invoke()
-        }
+        if (requestCode != btPermissionRequest) return
+        if (grants.isNotEmpty() && grants.all { it == PackageManager.PERMISSION_GRANTED }) onBtReady?.invoke() else onBtDenied?.invoke()
         onBtReady = null
+        onBtDenied = null
     }
 
     fun pairedControllers(): List<BtDevice>? {

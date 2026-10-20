@@ -59,7 +59,9 @@ object Mappings {
     /** What each layer can emit; the same filters the runtime honours. */
     fun allowed(layer: Layer, t: XboxTarget): Boolean = when (layer) {
         Layer.DESKTOP -> t == XboxTarget.NONE || t.keyBit >= 0 || t == XboxTarget.SCREENSHOT
-        else -> t.keyBit < 16
+        // A layer key inside the layer does nothing.
+        Layer.ACTION -> t.keyBit < 16 && t != XboxTarget.GUIDE_LAYER && t != XboxTarget.GFN_LAYER
+        Layer.GAMEPAD -> t.keyBit < 16
     }
 
     class Group(val title: String, val targets: List<XboxTarget>)
@@ -153,8 +155,8 @@ object Names {
     /** One line under the name in the editor, only where the name alone is not enough. */
     fun hint(t: XboxTarget): String? = when (t) {
         XboxTarget.START_HOLD -> "Synthesises a long press of Start, which opens GeForce NOW's overlay"
-        XboxTarget.GFN_LAYER -> "Tap for the GFN overlay, hold for the action layer on the back paddles"
-        XboxTarget.GUIDE_LAYER -> "Tap for Guide, hold for the action layer on the back paddles"
+        XboxTarget.GFN_LAYER -> "Tap for the GFN overlay, hold for the action layer"
+        XboxTarget.GUIDE_LAYER -> "Tap for Guide, hold for the action layer"
         XboxTarget.SCREENSHOT -> "Captures the screen and queues it for Gamehub"
         XboxTarget.LT_TRIGGER, XboxTarget.RT_TRIGGER -> "Forces the trigger axis to full while held"
         XboxTarget.KB_DPAD_CENTER -> "Clicks the focused key on the TV keyboard"
