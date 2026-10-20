@@ -17,7 +17,25 @@ import java.util.TimeZone
  * deleted only after the hub has confirmed the upload, so nothing is lost while offline.
  */
 object CaptureStore {
+    const val TMP_PREFIX = "tmp_"
     private const val PREVIEW_MAX_WIDTH = 1600
+    private val IEND = byteArrayOf(0x49, 0x45, 0x4E, 0x44) // "IEND"
+
+    /** True when [f] ends with a PNG IEND chunk, i.e. screencap finished writing it. */
+    fun isCompletePng(f: File): Boolean = try {
+        if (f.length() < 64) {
+            false
+        } else {
+            java.io.RandomAccessFile(f, "r").use { raf ->
+                val tail = ByteArray(12)
+                raf.seek(f.length() - 12)
+                raf.readFully(tail)
+                tail.copyOfRange(4, 8).contentEquals(IEND)
+            }
+        }
+    } catch (_: Throwable) {
+        false
+    }
     private const val PREVIEW_QUALITY = 82
 
     fun dir(context: Context): File? = context.getExternalFilesDir("captures")?.also { it.mkdirs() }
@@ -41,7 +59,19 @@ object CaptureStore {
 
     fun pending(context: Context): List<Pending> {
         val d = dir(context) ?: return emptyList()
-        return d.listFiles { f: java.io.File -> f.isFile && f.name.endsWith(".png") && f.length() > 0 }
+        val now = System.currentTimeMillis()
+        // Housekeeping: temp files from a capture that never finished, and truncated PNGs left by
+        // older versions (which timed out mid-encode), are parked instead of uploaded broken.
+        d.listFiles()?.forEach { f ->
+            val stale = now - f.lastModified() > 5 * 60_000
+            if (f.name.startsWith(TMP_PREFIX) && stale) f.delete()
+            else if (f.name.endsWith(".png") && !f.name.startsWith(TMP_PREFIX) && stale && !isCompletePng(f)) {
+                f.renameTo(File(d, f.name + ".incomplete"))
+            }
+        }
+        return d.listFiles { f: java.io.File ->
+            f.isFile && f.name.endsWith(".png") && !f.name.startsWith(TMP_PREFIX) && f.length() > 0
+        }
             ?.sortedBy { it.name }
             ?.map { png ->
                 val id = png.name.removeSuffix(".png")
@@ -56,7 +86,7 @@ object CaptureStore {
     }
 
     fun pendingCount(context: Context): Int =
-        dir(context)?.listFiles { f: java.io.File -> f.name.endsWith(".png") }?.size ?: 0
+        dir(context)?.listFiles { f: java.io.File -> f.name.endsWith(".png") && !f.name.startsWith(TMP_PREFIX) }?.size ?: 0
 
     /** Moves a capture the hub refused out of the queue (kept as .rejected for inspection). */
     fun reject(context: Context, id: String) {

@@ -116,6 +116,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Woken by the shell-uid UInputService after this process was killed, so the service
+             comes back in a second or two while the virtual pad stays registered. -->
+        <receiver
+            android:name=".service.ReviveReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.steamcontroller.android.action.REVIVE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Boot-time Shizuku retries scheduled by AutoStartReceiver. Not exported. -->
         <receiver
             android:name=".service.ShizukuRetryReceiver"

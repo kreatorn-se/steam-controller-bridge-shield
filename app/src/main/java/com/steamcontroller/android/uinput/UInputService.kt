@@ -2,6 +2,7 @@ package com.steamcontroller.android.uinput
 
 import android.content.Context
 import android.os.SystemClock
+import com.steamcontroller.android.BuildConfig
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -18,13 +19,20 @@ class UInputService : IUInputService.Stub {
         private const val TAG = "UInputService"
 
         /** How often the liveness watchdog checks for client silence. */
-        private const val WATCHDOG_TICK_MS = 5_000L
+        private const val WATCHDOG_TICK_MS = 500L
 
         /**
-         * Silence longer than this means the app that owns us is gone. Generous on purpose: the
-         * app polls at 50 Hz while its service runs, so this only trips on a killed client.
+         * The app polls at 50 Hz while its service runs, so this much silence means Android has
+         * killed it (on the Shield: the low-memory killer when a GFN stream starts). We keep the
+         * virtual devices alive - games never see the controller unplug - and revive the app.
          */
-        private const val CLIENT_IDLE_TIMEOUT_MS = 60_000L
+        private val REVIVE_AT_MS = longArrayOf(1_500L, 6_000L, 15_000L, 35_000L, 60_000L)
+
+        /** Give up after this much silence: the app is gone for good (force-stopped, uninstalled). */
+        private const val CLIENT_IDLE_TIMEOUT_MS = 90_000L
+
+        private const val REVIVE_ACTION = "com.steamcontroller.android.action.REVIVE"
+        private const val REVIVE_RECEIVER = "com.steamcontroller.android.service.ReviveReceiver"
     }
 
     @Suppress("unused")
@@ -59,10 +67,19 @@ class UInputService : IUInputService.Stub {
         val thread =
             Thread(
                 {
+                    var revivesSent = 0
                     while (true) {
                         try {
                             Thread.sleep(WATCHDOG_TICK_MS)
                             val idle = SystemClock.uptimeMillis() - lastCallAt.get()
+                            if (idle < REVIVE_AT_MS[0]) {
+                                revivesSent = 0
+                                continue
+                            }
+                            if (revivesSent < REVIVE_AT_MS.size && idle >= REVIVE_AT_MS[revivesSent]) {
+                                revivesSent++
+                                reviveApp(idle)
+                            }
                             if (idle > CLIENT_IDLE_TIMEOUT_MS) {
                                 Log.i(
                                     TAG,
@@ -84,6 +101,25 @@ class UInputService : IUInputService.Stub {
             )
         thread.isDaemon = true
         thread.start()
+    }
+
+    /**
+     * Asks the app to start its controller service again. A broadcast to the app's exported
+     * ReviveReceiver is the one route the shell uid has into a non-exported service; Android does
+     * not deliver it to a force-stopped app, so a deliberate force stop still stays stopped.
+     */
+    private fun reviveApp(idleMs: Long) {
+        try {
+            val p = ProcessBuilder(
+                "am", "broadcast", "-a", REVIVE_ACTION,
+                "-n", "${BuildConfig.APPLICATION_ID}/$REVIVE_RECEIVER",
+            ).redirectErrorStream(true).start()
+            p.waitFor(5, TimeUnit.SECONDS)
+            p.destroyForcibly()
+            Log.i(TAG, "client silent for ${idleMs}ms - keeping devices, asked the app to come back")
+        } catch (t: Throwable) {
+            Log.w(TAG, "revive broadcast failed: ${t.message}")
+        }
     }
 
     private fun touch() {
@@ -223,7 +259,7 @@ class UInputService : IUInputService.Stub {
                 }, "shell-output")
             reader.isDaemon = true
             reader.start()
-            if (!proc.waitFor(ShellAllowlist.TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            if (!proc.waitFor(ShellAllowlist.timeoutFor(cmd), TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "shell command timed out: ${cmd.joinToString(" ")}")
                 return null
             }

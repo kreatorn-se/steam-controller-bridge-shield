@@ -3,7 +3,6 @@ package com.steamcontroller.android.hub
 import android.app.Activity
 import android.text.InputFilter
 import android.text.InputType
-import android.text.format.DateUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.inputmethod.EditorInfo
@@ -47,7 +46,7 @@ object GamehubDialog {
                 buildString {
                     append(if (pending == 0) "All captures uploaded." else "$pending capture${if (pending == 1) "" else "s"} waiting to upload.")
                     append(' ')
-                    append(if (lastOk > 0) "Last sync ${DateUtils.getRelativeTimeSpanString(lastOk)}." else "Not synced yet. Start the service.")
+                    append(if (lastOk > 0) "Last sync ${ago(lastOk)}." else "Not synced yet. Start the service.")
                     if (err != null) append("\nLast problem: $err")
                 },
                 14f, dim = true,
@@ -145,6 +144,16 @@ object GamehubDialog {
                 codeInput?.requestFocus()
             }
             dialog.show()
+        }
+    }
+
+    private fun ago(ms: Long): String {
+        val s = (System.currentTimeMillis() - ms) / 1000
+        return when {
+            s < 60 -> "just now"
+            s < 3600 -> "${s / 60} min ago"
+            s < 86_400 -> "${s / 3600} h ago"
+            else -> "${s / 86_400} days ago"
         }
     }
 

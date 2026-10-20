@@ -36,8 +36,8 @@ android {
         applicationId = "io.github.lluppi.steamcontrollerbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0-gamehub"
+        versionCode = 4
+        versionName = "1.2.1-gamehub"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")

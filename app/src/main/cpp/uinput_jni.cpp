@@ -39,6 +39,11 @@ constexpr Candidate CANDIDATES[] = {
     { BACKEND_UHID,   uhid_backend   },
 };
 
+// Profile whose devices currently exist, or -1. Lets an app that was killed and restarted
+// re-attach to the devices this (shell-uid) process kept alive, instead of tearing them down
+// and making games see the controller unplug and replug.
+int g_created_profile = -1;
+
 size_t appendDetail(size_t offset, const char* format, ...) {
     if (offset >= sizeof(g_detail) - 1) return offset;
     va_list args;
@@ -56,6 +61,7 @@ void selectBackend() {
     // Whatever the previous backend created must not outlive the switch, or a uinput -> uhid
     // change would leave the old devices registered next to the new ones.
     if (g_backend != nullptr) g_backend->destroyDevices();
+    g_created_profile = -1;
     g_backend = nullptr;
     g_backend_id = BACKEND_NONE;
 
@@ -85,6 +91,10 @@ void selectBackend() {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_steamcontroller_android_uinput_UInputNative_selectBackend(JNIEnv*, jclass) {
     std::lock_guard<std::mutex> lock(g_lock);
+    if (g_backend != nullptr && g_created_profile >= 0) {
+        LOGI("re-attach: keeping the %s devices for profile %d", g_backend->name(), g_created_profile);
+        return g_backend_id;
+    }
     selectBackend();
     return g_backend_id;
 }
@@ -118,7 +128,13 @@ Java_com_steamcontroller_android_uinput_UInputNative_createDevice(JNIEnv*, jclas
         LOGE("createDevice called with no backend selected");
         return JNI_FALSE;
     }
-    return g_backend->createDevices(profileId) ? JNI_TRUE : JNI_FALSE;
+    if (g_created_profile == profileId) {
+        LOGI("createDevice: profile %d already live, reusing it", profileId);
+        return JNI_TRUE;
+    }
+    const bool ok = g_backend->createDevices(profileId);
+    g_created_profile = ok ? profileId : -1;
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -163,5 +179,6 @@ Java_com_steamcontroller_android_uinput_UInputNative_destroy(JNIEnv*, jclass) {
     std::lock_guard<std::mutex> lock(g_lock);
     if (g_backend == nullptr) return;
     g_backend->destroyDevices();
+    g_created_profile = -1;
     LOGI("Virtual devices destroyed (%s)", g_backend->name());
 }

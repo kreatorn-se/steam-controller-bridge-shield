@@ -36,37 +36,22 @@ object SystemActions {
                 val queueDir = CaptureStore.dir(context)
                 val fg = try { UsageStatsHelper.getCurrentForegroundApp(context) } catch (_: Throwable) { null }
 
+                say(context, "Capturing…")
                 var ok = false
                 if (queueDir != null) {
-                    val target = File(queueDir, "$id.png")
-                    val exit = runShell(arrayOf("screencap", "-p", target.path))
-                    ok = exit == 0 && target.length() > 0
+                    // Write under a temporary name: a 4K PNG takes the Shield 15-30 s to encode
+                    // during a stream, and the uploader must never pick up a half-written file.
+                    val tmp = File(queueDir, "${CaptureStore.TMP_PREFIX}$id.png")
+                    val exit = runShell(arrayOf("screencap", "-p", tmp.path))
+                    ok = exit == 0 && CaptureStore.isCompletePng(tmp) && tmp.renameTo(File(queueDir, "$id.png"))
                     if (!ok) {
-                        Log.w(TAG, "screencap into queue failed (exit $exit); trying Pictures fallback")
-                        target.delete()
+                        Log.w(TAG, "screencap into queue failed (exit $exit, ${tmp.length()} bytes)")
+                        tmp.delete()
                     }
+                    // Only fall back to Pictures when the queue directory itself was unwritable;
+                    // re-encoding after a slow capture would just double the wait.
+                    if (!ok && exit != -1) ok = captureViaPictures(context, runShell, id, queueDir)
                 }
-                if (!ok) {
-                    val dir = ShellAllowlist.SCREENSHOT_DIR
-                    val path = "$dir/$id.png"
-                    runShell(arrayOf("mkdir", "-p", dir))
-                    val exit = runShell(arrayOf("screencap", "-p", path))
-                    if (exit == 0 && queueDir != null) {
-                        ok = try {
-                            File(path).copyTo(File(queueDir, "$id.png"), overwrite = true)
-                            true
-                        } catch (t: Throwable) {
-                            Log.w(TAG, "copy from Pictures failed: ${t.message}")
-                            say(context, "Screenshot saved to Pictures · storage access needed to upload")
-                            return@Thread
-                        }
-                    } else if (exit == 0) {
-                        // Saved locally even though there is no queue directory.
-                        say(context, "Screenshot saved to Pictures")
-                        return@Thread
-                    }
-                }
-
                 if (!ok) {
                     say(context, "Screenshot failed")
                     return@Thread
@@ -82,6 +67,21 @@ object SystemActions {
                 Log.e(TAG, "Screenshot threw: ${t.message}")
             }
         }, "screencap").apply { isDaemon = true; start() }
+    }
+
+    private fun captureViaPictures(context: Context, runShell: (Array<String>) -> Int, id: String, queueDir: File): Boolean {
+        val dir = ShellAllowlist.SCREENSHOT_DIR
+        val path = "$dir/$id.png"
+        runShell(arrayOf("mkdir", "-p", dir))
+        if (runShell(arrayOf("screencap", "-p", path)) != 0) return false
+        return try {
+            File(path).copyTo(File(queueDir, "$id.png"), overwrite = true)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "copy from Pictures failed: ${t.message}")
+            say(context, "Screenshot saved to Pictures · storage access needed to upload")
+            false
+        }
     }
 
     private fun say(context: Context, msg: String) {

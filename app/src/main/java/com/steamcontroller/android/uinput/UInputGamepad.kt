@@ -186,12 +186,14 @@ class UInputGamepad(
         Shizuku
             .UserServiceArgs(
                 ComponentName(context.packageName, UInputService::class.java.name),
-            ).daemon(false)
+            // Daemon: the user service (and the virtual pad it holds) must outlive this app
+            // process, which the Shield's low-memory killer ends when a GFN stream starts.
+            ).daemon(true)
             .processNameSuffix("uinput")
             .debuggable(false)
             // Bump whenever IUInputService changes: a stale user-service process would still be
             // running the previous AIDL and silently fail or misroute every call below.
-            .version(3)
+            .version(4)
 
     @Volatile private var deviceReady = false
 
@@ -219,6 +221,11 @@ class UInputGamepad(
                             deviceReady = ok
                             Log.i(TAG, "createGamepad(${profile.displayName}) → $ok")
                             if (ok) applyShowImeOverride(svc)
+                            // Keep Android from blocking our own restart as "app idle".
+                            try {
+                                svc.runShellCommand(arrayOf("cmd", "deviceidle", "whitelist", "+${context.packageName}"))
+                            } catch (_: Throwable) {
+                            }
                         }
                     } catch (t: Throwable) {
                         Log.e(TAG, "init failed: ${t.message}")

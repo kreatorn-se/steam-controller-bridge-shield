@@ -9,11 +9,16 @@ import com.steamcontroller.android.BuildConfig
  * - `mkdir -p` / `screencap -p` inside the screenshots directory (SystemActions)
  * - `screencap -p` into the app's own Gamehub upload queue (Android/data/<app>/files/captures)
  * - `settings get|put|delete secure show_ime_with_hard_keyboard` (UInputGamepad)
+ * - `cmd deviceidle whitelist +<this app>` so Android may restart the service after a kill
  *
  * Adding a system action means adding its exact shape here.
  */
 internal object ShellAllowlist {
     const val TIMEOUT_MS = 15_000L
+    // A 4K PNG takes the Shield 15-30 s to encode while a GFN stream is running.
+    private const val SCREENCAP_TIMEOUT_MS = 120_000L
+
+    fun timeoutFor(cmd: Array<String>): Long = if (cmd.firstOrNull() == "screencap") SCREENCAP_TIMEOUT_MS else TIMEOUT_MS
     const val MAX_OUTPUT_BYTES = 64 * 1024
 
     const val SCREENSHOT_DIR = "/sdcard/Pictures/Screenshots"
@@ -37,6 +42,10 @@ internal object ShellAllowlist {
 
             args.size == 3 && args[0] == "screencap" && args[1] == "-p" -> {
                 isScreenshotPath(args[2])
+            }
+
+            args == listOf("cmd", "deviceidle", "whitelist", "+${BuildConfig.APPLICATION_ID}") -> {
+                true
             }
 
             args.size >= 4 && args[0] == "settings" && args[2] == "secure" && args[3] == IME_SETTING -> {
