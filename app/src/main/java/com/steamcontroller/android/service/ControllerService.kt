@@ -1007,7 +1007,6 @@ class ControllerService : Service() {
         // The parser returns null for anything that is not a 0x42/0x45 state report.
         if (state != null) {
             _stateFlow.value = state
-            ControllerLive.publishFrame(state)
 
             // Frames are the proof of life. Flip to LINKED immediately rather than waiting for
             // the ticker, so a reconnected controller goes green the moment it starts talking.
@@ -1021,6 +1020,7 @@ class ControllerService : Service() {
             // Input delivery is the latency-critical path. Diagnostics and controller haptics
             // happen afterwards so a log format or USB output write cannot delay this frame.
             handleState(state)
+            ControllerLive.publishFrame(state)
             if (initializedTransport == Transport.USB) updateUsbTrackpadHaptics(state, nowMs)
 
             // Diagnostic: dump the whole report on button changes, but only after injection.

@@ -4,6 +4,7 @@ import android.os.SystemClock
 import com.steamcontroller.android.parser.SteamControllerState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * In-process bus between the runtime (ControllerService) and the settings UI.
@@ -41,13 +42,15 @@ object ControllerLive {
     val snapshot: StateFlow<Snapshot> get() = _snapshot
 
     // ── Runtime side ────────────────────────────────────────────────────────────────────
+    // Both writers are compare-and-set loops (the frame thread and the supervisor write
+    // concurrently; a plain read-modify-write here used to be able to drop the other's change).
     fun publishFrame(state: SteamControllerState) {
-        val s = _snapshot.value
-        _snapshot.value = s.copy(state = state, connected = true, atMs = SystemClock.uptimeMillis())
+        val at = SystemClock.uptimeMillis()
+        _snapshot.update { it.copy(state = state, connected = true, atMs = at) }
     }
 
     fun update(block: (Snapshot) -> Snapshot) {
-        synchronized(this) { _snapshot.value = block(_snapshot.value).copy(atMs = SystemClock.uptimeMillis()) }
+        _snapshot.update { block(it).copy(atMs = SystemClock.uptimeMillis()) }
     }
 
     // ── UI side: input capture ──────────────────────────────────────────────────────────
