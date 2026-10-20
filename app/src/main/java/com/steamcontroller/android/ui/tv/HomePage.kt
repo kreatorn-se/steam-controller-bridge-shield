@@ -70,6 +70,7 @@ class HomePage(host: Host) : Page(host) {
     private val status = Kit.label(ctx, "", 11f, C.text3)
     private val nowCard = NowPlayingCard(ctx)
     private val rowsBox = LinearLayout(ctx)
+    private val topFade = View(ctx)
 
     private val handler = Handler(Looper.getMainLooper())
     private var home: GamehubTv.Home? = null
@@ -117,6 +118,10 @@ class HomePage(host: Host) : Page(host) {
         scroll.target = { focused -> targetScroll(focused) }
         scroll.onScrolled = { y -> onScrolled(y) }
         root.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // Rows scrolled above the keyline fade out under the status strip instead of colliding with it.
+        topFade.background = Scrim(intArrayOf(C.bg, C.alpha(C.bg, 0.92f), C.alpha(C.bg, 0f)), floatArrayOf(0f, 0.6f, 1f))
+        topFade.alpha = 0f
+        root.addView(topFade, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keylineTop + ctx.dp(6)))
         return root
     }
 
@@ -413,7 +418,12 @@ class HomePage(host: Host) : Page(host) {
 
     private fun onScrolled(y: Int) {
         val t = (y.toFloat() / heroH).coerceIn(0f, 1f)
-        heroLayer.alpha = 1f - 0.8f * t
+        heroLayer.alpha = 1f - 0.65f * t
+        // The hero's text leaves before it can reach the strip.
+        val text = (1f - y / (heroH * 0.4f)).coerceIn(0f, 1f)
+        heroText.alpha = text
+        nowCard.alpha = text
+        topFade.alpha = (y / ctx.dp(48f)).coerceIn(0f, 1f)
     }
 
     // ── rows ──────────────────────────────────────────────────────────────────────────
@@ -495,7 +505,7 @@ class HomePage(host: Host) : Page(host) {
         }
         v.memory.addView(list, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         v.addView(v.memory, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(10) })
-        v.setPadding(0, 0, 0, ctx.dp(16))
+        v.setPadding(0, 0, 0, ctx.dp(26))
         v.header.setTextColor(C.text2)
         return v
     }
@@ -530,7 +540,7 @@ class HomePage(host: Host) : Page(host) {
                 val grid = c.art?.grid
                 Img.into(t.image, grid ?: c.cover?.previewUrl, if (grid != null) spec else Img.Spec(ctx.px(kind.h * 16 / 9)))
                 t.setOver(if (grid == null) c.title else null)
-                t.setCaption(c.title, Fmt.count(c.count))
+                t.setCaption(if (grid == null) null else c.title, Fmt.count(c.count))
             }
             TileKind.PERSON -> {
                 Img.into(t.image, c.avatar ?: c.cover?.previewUrl, spec)

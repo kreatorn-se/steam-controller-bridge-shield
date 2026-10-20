@@ -311,7 +311,8 @@ class MainActivity : AppCompatActivity(), Host {
     private fun renderNow(s: HomeRepo.State) {
         val np = (s as? HomeRepo.State.Ready)?.home?.nowPlaying
         nowGame = np?.game
-        if (np == null) {
+        // Home has the full Now-playing card; the chip is for every other page.
+        if (np == null || cur == PageId.HOME) {
             if (nowChip.hasFocus()) linkChip.requestFocus()
             nowChip.visibility = View.GONE
             return
@@ -378,6 +379,7 @@ class MainActivity : AppCompatActivity(), Host {
             Anim.fadeIn(p.view)
             title.text = if (id == PageId.HOME) "" else id.title
             rail.setCurrent(id)
+            renderNow(HomeRepo.state)
             p.refresh()
             if (resumed) p.onShow()
         }

@@ -207,7 +207,7 @@ class LibraryPage(host: Host) : Page(host) {
                 val art = c.art?.grid
                 Img.into(tile.image, art ?: c.cover?.previewUrl, if (art != null) spec else Img.Spec(ctx.px(t.h * 16 / 9)))
                 tile.setOver(if (art == null) c.title else null)
-                tile.setCaption(c.title, Fmt.count(c.count))
+                tile.setCaption(if (art == null) null else c.title, Fmt.count(c.count))
             }
             Tab.PEOPLE -> {
                 Img.into(tile.image, c.avatar ?: c.cover?.previewUrl, spec)

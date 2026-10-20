@@ -93,7 +93,9 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     private val gridInfo = Kit.label(ctx, "", 12f, C.text)
     private val grid = RecyclerView(ctx)
     private val options = LinearLayout(ctx)
-    private val optRows = ArrayList<TextView>()
+    private val optRows = ArrayList<LinearLayout>()
+    private val optKeys = ArrayList<TextView>()
+    private val optVals = ArrayList<TextView>()
 
     private var colls = req.siblings
     private var collIndex = req.index.coerceIn(0, (req.siblings.size - 1).coerceAtLeast(0))
@@ -265,11 +267,15 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         options.background = android.graphics.drawable.GradientDrawable().apply { setColor(C.alpha(C.sheet, 0.94f)); cornerRadius = ctx.dp(12f); setStroke(ctx.dp(1), C.line) }
         options.addView(Kit.label(ctx, ctx.getString(R.string.show_options), 11f, C.text3), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(ctx.dp(14), ctx.dp(8), 0, ctx.dp(8)) })
         repeat(3) {
-            val row = Kit.body(ctx, "", 16f, C.text, medium = true)
-            row.minHeight = ctx.dp(44)
-            row.gravity = Gravity.CENTER_VERTICAL
-            row.setPadding(ctx.dp(14), 0, ctx.dp(14), 0)
+            val row = Kit.row(ctx)
+            row.minimumHeight = ctx.dp(44)
+            row.setPadding(ctx.dp(17), 0, ctx.dp(17), 0)
             row.surface(radiusDp = 8f, fill = 0, stroke = 0)
+            val key = Kit.body(ctx, "", 16f, C.text, medium = true)
+            val value = Kit.value(ctx, "", 16f, C.text2)
+            row.addView(key, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(value)
+            optKeys.add(key); optVals.add(value)
             optRows.add(row)
             options.addView(row, LinearLayout.LayoutParams(ctx.dp(300), ViewGroup.LayoutParams.WRAP_CONTENT))
         }
@@ -751,7 +757,14 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         }
         stripInfo.text = text
         val ref = colls.getOrNull(collIndex)
-        gridInfo.text = (ref?.title?.let { "$it  ·  " } ?: "") + text
+        val title = ref?.title
+        // The collection's title, then the selection; the game only when the title does not say it.
+        gridInfo.text = if (title == null) text else buildString {
+            append(title)
+            if (!title.contains(s.gameOrUnknown(), ignoreCase = true)) append("  ·  ").append(s.gameOrUnknown())
+            append("  ·  ").append(Fmt.dateShort(s)).append("  ·  ").append(Fmt.time(s))
+            append("     ").append(sel + 1).append(" / ").append(items.size).append(if (next != null) "+" else "")
+        }
     }
 
     private fun scrollStrip(immediate: Boolean) {
@@ -791,13 +804,9 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         for ((i, row) in optRows.withIndex()) {
             val (k, v) = values[i]
             val on = i == optSel
-            row.text = android.text.SpannableStringBuilder().apply {
-                append(k)
-                append("   ")
-                val start = length
-                append(if (on && i > 0) "‹  $v  ›" else v)
-                setSpan(android.text.style.ForegroundColorSpan(if (on) C.accent else C.text2), start, length, 0)
-            }
+            optKeys[i].text = k
+            optVals[i].text = if (on && i > 0) "‹  $v  ›" else v
+            optVals[i].setTextColor(if (on) C.accent else C.text2)
             row.isActivated = on
             row.background?.setState(if (on) intArrayOf(android.R.attr.state_focused, android.R.attr.state_enabled) else intArrayOf(android.R.attr.state_enabled))
             row.background?.invalidateSelf()

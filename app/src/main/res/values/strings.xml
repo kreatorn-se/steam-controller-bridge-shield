@@ -381,7 +381,7 @@
     <string name="show_fav_failed">Favourite not saved</string>
     <string name="show_options">Slideshow</string>
     <string name="show_options_keys">↑ ↓ choose · ← → change · B or Menu close</string>
-    <string name="show_opt_play">Slideshow</string>
+    <string name="show_opt_play">Playback</string>
     <string name="show_opt_interval">Time per picture</string>
     <string name="show_per_picture">%1$d s per picture</string>
     <string name="show_opt_kenburns">Ken Burns</string>

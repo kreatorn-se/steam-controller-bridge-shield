@@ -78,8 +78,10 @@ class InboxPage(host: Host) : Page(host) {
     private val emptyBtn = Kit.button(ctx, "", Kit.Btn.SECONDARY)
     private var emptyAction: (() -> Unit)? = null
 
-    private val imgW = 512
-    private val imgH = 288
+    private val imgW = 456
+    private val imgH = 256
+    private val nextW = 88
+    private val nextH = 50
 
     init {
         keepBtn = keyButton("A", R.string.inbox_keep, Kit.Btn.PRIMARY) { keep(false) }
@@ -109,7 +111,7 @@ class InboxPage(host: Host) : Page(host) {
         listMemory.addView(listScroll)
         listMemory.fallback = { list.getChildAt(0) }
         left.addView(listMemory, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        content.addView(left, LinearLayout.LayoutParams(ctx.dp(224), ViewGroup.LayoutParams.MATCH_PARENT))
+        content.addView(left, LinearLayout.LayoutParams(ctx.dp(208), ViewGroup.LayoutParams.MATCH_PARENT))
 
         // Right: the capture being sorted.
         val right = Kit.column(ctx)
@@ -147,8 +149,8 @@ class InboxPage(host: Host) : Page(host) {
         for ((i, b) in listOf(keepBtn, skipBtn, favBtn, undoBtn).withIndex()) btns.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = ctx.dp(4) })
         btns.addView(Kit.grow(ctx))
         btns.addView(allBtn)
-        right.addView(btns, LinearLayout.LayoutParams(ctx.dp(imgW + 6 + 14 + 110), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(12) })
-        content.addView(right, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { marginStart = ctx.dp(22) })
+        right.addView(btns, LinearLayout.LayoutParams(ctx.dp(imgW + 6 + 14 + nextW), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(12) })
+        content.addView(right, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { marginStart = ctx.dp(20) })
         content.clipChildren = false
         root.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -306,7 +308,7 @@ class InboxPage(host: Host) : Page(host) {
 
     private fun renderNext(shots: List<Shot>) {
         nextRow.removeAllViews()
-        val spec = Img.Spec(ctx.px(104))
+        val spec = Img.Spec(ctx.px(nextW))
         for (s in shots.drop(1).take(4)) {
             val iv = ImageView(ctx)
             iv.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -314,7 +316,7 @@ class InboxPage(host: Host) : Page(host) {
             iv.roundCorners(6f)
             iv.alpha = 0.7f
             Img.into(iv, s.previewUrl, spec)
-            nextRow.addView(iv, LinearLayout.LayoutParams(ctx.dp(104), ctx.dp(58)).apply { bottomMargin = ctx.dp(10) })
+            nextRow.addView(iv, LinearLayout.LayoutParams(ctx.dp(nextW), ctx.dp(nextH)).apply { bottomMargin = ctx.dp(9) })
         }
     }
 
