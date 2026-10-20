@@ -15,10 +15,12 @@ import com.steamcontroller.android.input.MOUSE_LEFT_PAD_CLICK_BIT
 import com.steamcontroller.android.input.MOUSE_MODE_FIXED_DPAD
 import com.steamcontroller.android.input.MOUSE_RIGHT_PAD_CLICK_BIT
 import com.steamcontroller.android.input.MouseTarget
+import com.steamcontroller.android.input.ProfileSwitcher
 import com.steamcontroller.android.input.SteamButton
 import com.steamcontroller.android.input.StickCalibration
 import com.steamcontroller.android.input.SystemActions
 import com.steamcontroller.android.input.XboxTarget
+import com.steamcontroller.android.live.ControllerLive
 import com.steamcontroller.android.parser.Buttons
 import com.steamcontroller.android.parser.SteamControllerState
 import rikka.shizuku.Shizuku
@@ -47,6 +49,14 @@ class UInputGamepad(
         private const val TRIGGER_PRESS_THRESHOLD = 30_000
         private const val TRIGGER_RELEASE_THRESHOLD = 28_500
         private const val TRIGGER_DEBOUNCE_MS = 12L
+
+        // Trackpad speed (pad units per ms) that counts as "fast" for pointer acceleration: about
+        // half the pad's width in a tenth of a second.
+        private const val PAD_SPEED_REF = 250f
+        private const val PAD_SPEED_SMOOTHING = 0.35f
+
+        // SteamButton.values() allocates a fresh array on every call; this runs per frame.
+        private val ALL_BUTTONS = SteamButton.values()
     }
 
     private class AnalogButtonDebouncer {
@@ -146,7 +156,10 @@ class UInputGamepad(
     // go on time even if the controller happens to go quiet (release is otherwise frame-driven).
     private var lastState: SteamControllerState? = null
     private val holdHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val startHoldRelease = Runnable { lastState?.let { pushFrame(it) } }
+    private val startHoldRelease =
+        Runnable {
+            lastState?.let { if (ControllerLive.isOutputSuppressed()) pushSuppressed(it) else pushFrame(it) }
+        }
 
     private fun beginStartHold(now: Long) {
         startHoldUntil = now + START_HOLD_MS
@@ -178,6 +191,38 @@ class UInputGamepad(
     @Volatile private var cachedGyroInvertY = false
 
     @Volatile private var cachedTrackpadAsMouse: Boolean = true
+
+    // Response curves (Prefs.getStickOuter/getStickCurve/getPadAcceleration), refreshed with the
+    // calibration cache.
+    @Volatile private var cachedLeftOuter = 100
+
+    @Volatile private var cachedRightOuter = 100
+
+    @Volatile private var cachedLeftCurve = 1f
+
+    @Volatile private var cachedRightCurve = 1f
+
+    @Volatile private var cachedPadAccel = 0f
+
+    // Per-frame scratch for the shaped sticks (pushFrame is synchronized).
+    private val leftOut = IntArray(2)
+    private val rightOut = IntArray(2)
+
+    // Pointer acceleration state: smoothed pad speed and the sub-pixel remainder it carries.
+    private var padSpeed = 0f
+    private var padRemX = 0f
+    private var padRemY = 0f
+    private var lastPadSampleAt = 0L
+
+    // Profile quick switch: Steam (the action-layer button) held + D-pad left/right.
+    private var chordLeftWasDown = false
+    private var chordRightWasDown = false
+
+    // True once the layer button was used for a chord this press, so its release is not a tap.
+    private var layerChordUsed = false
+
+    // A neutral frame has been sent since output was last suppressed or the controller went away.
+    private var neutralSent = false
 
     // Trigger / pad scroll: accumulator so we can convert continuous 0..32767 deltas into discrete wheel ticks
     private var scrollAccumulator: Int = 0
@@ -224,6 +269,13 @@ class UInputGamepad(
                             // Keep Android from blocking our own restart as "app idle".
                             try {
                                 svc.runShellCommand(arrayOf("cmd", "deviceidle", "whitelist", "+${context.packageName}"))
+                            } catch (_: Throwable) {
+                            }
+                            // Let the status pill draw above GeForce NOW (ui/pill). Exact-match allowlisted.
+                            try {
+                                svc.runShellCommand(
+                                    arrayOf("appops", "set", context.packageName, "SYSTEM_ALERT_WINDOW", "allow"),
+                                )
                             } catch (_: Throwable) {
                             }
                         }
@@ -376,6 +428,25 @@ class UInputGamepad(
     val isReady get() = service != null && deviceReady
 
     /**
+     * Recreate the virtual pad in the user service that is already bound (reconnect path), so a
+     * pad that failed or was torn down comes back without rebinding. Blocking binder call.
+     */
+    fun ensurePad(): Boolean {
+        if (isReady) return true
+        val svc = service ?: return false
+        return try {
+            val ok = svc.createGamepad(profile.id)
+            deviceReady = ok
+            if (ok) lastSentKeys = 0
+            Log.i(TAG, "ensurePad: createGamepad(${profile.displayName}) → $ok")
+            ok
+        } catch (t: Throwable) {
+            Log.w(TAG, "ensurePad failed: ${t.message}")
+            false
+        }
+    }
+
+    /**
      * Swap the emulated controller profile without unbinding the user service.
      * The native code recreates the /dev/uinput device with the new VID/PID.
      * Returns true on success.
@@ -400,27 +471,111 @@ class UInputGamepad(
         }
     }
 
+    private fun refreshCaches(now: Long) {
+        if (now - lastCalRefresh <= calRefreshIntervalMs) return
+        cachedLeftCal = Prefs.getLeftCalibration(context)
+        cachedRightCal = Prefs.getRightCalibration(context)
+        cachedMapping = Prefs.getAllMappings(context)
+        cachedDesktopMapping = Prefs.getAllDesktopMappings(context)
+        cachedMouseSensitivity = Prefs.getMouseSensitivity(context)
+        cachedTrackpadAsMouse = Prefs.getTrackpadAsMouseInGamepad(context)
+        cachedGyroEnabled = Prefs.getGyroEnabled(context)
+        cachedGyroTuning = Prefs.getGyroTuning(context)
+        cachedGyroActivation = Prefs.getGyroActivation(context)
+        cachedGyroInvertY = Prefs.getGyroInvertY(context)
+        cachedLeftOuter = Prefs.getStickOuter(context, true)
+        cachedRightOuter = Prefs.getStickOuter(context, false)
+        cachedLeftCurve = Prefs.getStickCurve(context, true)
+        cachedRightCurve = Prefs.getStickCurve(context, false)
+        cachedPadAccel = Prefs.getPadAcceleration(context)
+        lastCalRefresh = now
+    }
+
+    /** The action-layer source (GUIDE_LAYER / GFN_LAYER), if one is mapped. */
+    private fun layerSource(): Map.Entry<SteamButton, XboxTarget>? {
+        for (e in cachedMapping.entries) {
+            if (e.value == XboxTarget.GUIDE_LAYER || e.value == XboxTarget.GFN_LAYER) return e
+        }
+        return null
+    }
+
+    /**
+     * Output is suppressed (ControllerLive.suppressOutput - a settings screen is capturing input):
+     * the virtual pad gets a neutral frame and no special action, key or layer fires, but the
+     * edge-detection state keeps tracking the real buttons so nothing fires the moment the
+     * suppression lapses while a button is still held.
+     */
+    @Synchronized
+    fun pushSuppressed(state: SteamControllerState) {
+        val svc = service ?: return
+        lastState = state
+        val now = android.os.SystemClock.uptimeMillis()
+        refreshCaches(now)
+        val sources = sourceButtons(state)
+        lastSourceButtons = sources
+        val layer = layerSource()
+        layerWasPressed = layer != null && sources and (1L shl layer.key.ordinal) != 0L
+        layerPressedAt = 0L // a release after the suppression must not count as a tap
+        layerChordUsed = false
+        chordLeftWasDown = true // and a held D-pad must not count as a fresh chord
+        chordRightWasDown = true
+        guideTapPending = false
+        startTapPending = false
+        startHoldUntil = 0L
+        holdHandler.removeCallbacks(startHoldRelease)
+        resetPointerState()
+        gyro.reset()
+        sendNeutral(svc)
+    }
+
+    /** Release everything on the virtual devices (controller switched off, link lost). */
+    @Synchronized
+    fun pushNeutral() {
+        val svc = service ?: return
+        startHoldUntil = 0L
+        holdHandler.removeCallbacks(startHoldRelease)
+        lastSourceButtons = 0L
+        layerWasPressed = false
+        layerChordUsed = false
+        resetPointerState()
+        gyro.reset()
+        neutralSent = false
+        sendNeutral(svc)
+    }
+
+    private fun sendNeutral(svc: IUInputService) {
+        try {
+            if (!profile.isMouseMode) svc.sendFrame(0, 0, 0, 0, 0, 0, 0, 0, 0)
+            if (!neutralSent && lastSentKeys != 0) {
+                lastSentKeys = 0
+                svc.sendMouseFrame(0, 0, 0, 0)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "neutral frame IPC failed: ${t.message}")
+        }
+        neutralSent = true
+    }
+
+    private fun resetPointerState() {
+        rightPadHadContact = false
+        leftPadHadContact = false
+        scrollAccumulator = 0
+        padSpeed = 0f
+        padRemX = 0f
+        padRemY = 0f
+    }
+
     // Push one HID frame from the SC2026 parser, translated to Xbox 360 layout.
     @Synchronized
     fun pushFrame(state: SteamControllerState) {
         val svc = service ?: return
         lastState = state
 
+        neutralSent = false
+
         // Refresh cached calibrations + button mapping from prefs at most every 250ms
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastCalRefresh > calRefreshIntervalMs) {
-            cachedLeftCal = Prefs.getLeftCalibration(context)
-            cachedRightCal = Prefs.getRightCalibration(context)
-            cachedMapping = Prefs.getAllMappings(context)
-            cachedDesktopMapping = Prefs.getAllDesktopMappings(context)
-            cachedMouseSensitivity = Prefs.getMouseSensitivity(context)
-            cachedTrackpadAsMouse = Prefs.getTrackpadAsMouseInGamepad(context)
-            cachedGyroEnabled = Prefs.getGyroEnabled(context)
-            cachedGyroTuning = Prefs.getGyroTuning(context)
-            cachedGyroActivation = Prefs.getGyroActivation(context)
-            cachedGyroInvertY = Prefs.getGyroInvertY(context)
-            lastCalRefresh = now
-        }
+        refreshCaches(now)
 
         if (profile.isMouseMode) {
             pushMouseFrame(svc, state)
@@ -442,16 +597,30 @@ class UInputGamepad(
         val sourceButtons = sourceButtons(state)
         // Either layer target may own the action layer; GUIDE_LAYER taps Guide, GFN_LAYER
         // taps a synthesised long-press of Start (see START_HOLD).
-        val layerSource =
-            cachedMapping.entries.firstOrNull {
-                it.value == XboxTarget.GUIDE_LAYER || it.value == XboxTarget.GFN_LAYER
-            }
+        val layerSource = layerSource()
         val layerPressed =
             layerSource?.let { sourceButtons and (1L shl it.key.ordinal) != 0L } == true
         if (layerPressed && !layerWasPressed) layerPressedAt = now
-        if (!layerPressed && layerWasPressed && now - layerPressedAt < ACTION_LAYER_HOLD_MS) {
+
+        // Profile quick switch: layer button + D-pad left/right, edge-triggered. The chord
+        // consumes the press, so letting go of the layer button afterwards is not a tap.
+        val chordLeft = layerPressed && state.isButtonPressed(Buttons.DPAD_LEFT)
+        val chordRight = layerPressed && state.isButtonPressed(Buttons.DPAD_RIGHT)
+        if (chordLeft && !chordLeftWasDown) {
+            layerChordUsed = true
+            ProfileSwitcher.cycle(context, -1)
+        }
+        if (chordRight && !chordRightWasDown) {
+            layerChordUsed = true
+            ProfileSwitcher.cycle(context, +1)
+        }
+        chordLeftWasDown = chordLeft
+        chordRightWasDown = chordRight
+
+        if (!layerPressed && layerWasPressed && now - layerPressedAt < ACTION_LAYER_HOLD_MS && !layerChordUsed) {
             if (layerSource?.value == XboxTarget.GFN_LAYER) startTapPending = true else guideTapPending = true
         }
+        if (!layerPressed) layerChordUsed = false
         val layerActive = layerPressed && now - layerPressedAt >= ACTION_LAYER_HOLD_MS
         layerWasPressed = layerPressed
         if (guideTapPending) {
@@ -504,20 +673,28 @@ class UInputGamepad(
         val lt = maxOf(ltAnalog, ltOverride)
         val rt = maxOf(rtAnalog, rtOverride)
 
+        // While the layer button is held the D-pad belongs to the profile chord, not the game.
         val dpadX =
             when {
+                layerPressed -> 0
                 state.isButtonPressed(Buttons.DPAD_RIGHT) -> 1
                 state.isButtonPressed(Buttons.DPAD_LEFT) -> -1
                 else -> 0
             }
         val dpadY =
             when {
+                layerPressed -> 0
                 state.isButtonPressed(Buttons.DPAD_DOWN) -> 1
                 state.isButtonPressed(Buttons.DPAD_UP) -> -1
                 else -> 0
             }
-        val (lxCal, lyCalRaw) = leftCal.apply(state.leftJoyX.toInt(), state.leftJoyY.toInt())
-        val (rxCal, ryCalRaw) = rightCal.apply(state.rightJoyX.toInt(), state.rightJoyY.toInt())
+        // Calibration, inner + outer deadzone and response curve, into per-frame scratch arrays.
+        leftCal.applyShaped(state.leftJoyX.toInt(), state.leftJoyY.toInt(), cachedLeftOuter, cachedLeftCurve, leftOut)
+        rightCal.applyShaped(state.rightJoyX.toInt(), state.rightJoyY.toInt(), cachedRightOuter, cachedRightCurve, rightOut)
+        val lxCal = leftOut[0]
+        val lyCalRaw = leftOut[1]
+        val rxCal = rightOut[0]
+        val ryCalRaw = rightOut[1]
 
         // SC2026 reports Y positive = up; Linux input ABS_Y convention is Y positive = down.
         val ly = -lyCalRaw.coerceAtLeast(-32767)
@@ -670,18 +847,43 @@ class UInputGamepad(
         // Treating that as motion computes a delta of -(last position), which drags the cursor
         // straight back to where the swipe began the moment the finger leaves the pad. A real
         // finger sitting exactly on the pad's electrical centre is not a thing.
+        val now = android.os.SystemClock.uptimeMillis()
         if (!touching || (curX == 0 && curY == 0)) {
             rightPadHadContact = false
+            padSpeed = 0f
+            padRemX = 0f
+            padRemY = 0f
             return 0 to 0
         }
         var relX = 0
         var relY = 0
         if (rightPadHadContact) {
             val sens = cachedMouseSensitivity
-            relX = ((curX - lastRightPadX) / 128f * sens).toInt()
-            // SC2026 Y up positive → mouse Y down positive: invert
-            relY = (-(curY - lastRightPadY) / 128f * sens).toInt()
+            val dx = curX - lastRightPadX
+            val dy = curY - lastRightPadY
+            val accel = cachedPadAccel
+            if (accel <= 0f) {
+                relX = (dx / 128f * sens).toInt()
+                // SC2026 Y up positive → mouse Y down positive: invert
+                relY = (-dy / 128f * sens).toInt()
+            } else {
+                // Pointer acceleration: gain = 1 + accel x normalised speed. The speed is
+                // per millisecond (independent of the report rate) and smoothed, and the
+                // fractional remainder carries over so slow, precise moves are not lost to
+                // truncation.
+                val dt = (now - lastPadSampleAt).coerceIn(1L, 50L).toFloat()
+                val speed = (kotlin.math.sqrt((dx.toFloat() * dx + dy.toFloat() * dy)) / dt / PAD_SPEED_REF).coerceAtMost(1f)
+                padSpeed += (speed - padSpeed) * PAD_SPEED_SMOOTHING
+                val gain = sens * (1f + accel * padSpeed) / 128f
+                padRemX += dx * gain
+                padRemY += -dy * gain
+                relX = padRemX.toInt()
+                relY = padRemY.toInt()
+                padRemX -= relX
+                padRemY -= relY
+            }
         }
+        lastPadSampleAt = now
         lastRightPadX = curX
         lastRightPadY = curY
         rightPadHadContact = true
@@ -702,7 +904,7 @@ class UInputGamepad(
     private fun sourceButtons(state: SteamControllerState): Long {
         val now = android.os.SystemClock.uptimeMillis()
         var pressed = 0L
-        SteamButton.values().forEach { source ->
+        for (source in ALL_BUTTONS) {
             val isPressed =
                 when (source) {
                     SteamButton.LT -> leftTriggerButton.update(state.leftTrigger, now)
