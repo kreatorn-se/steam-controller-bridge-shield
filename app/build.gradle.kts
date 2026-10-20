@@ -107,6 +107,12 @@ android {
         }
     }
 
+    packaging {
+        resources {
+            excludes += setOf("META-INF/LICENSE.md", "META-INF/LICENSE-notice.md", "META-INF/NOTICE.md")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -126,5 +132,12 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     // Talks ADB to the Shield itself to start Shizuku after a reboot (ShizukuAdbStarter).
-    implementation("dev.mobile:dadb:1.2.9")
+    implementation("dev.mobile:dadb:1.2.9") {
+        // dadb's published POM drags its JUnit 5 test stack into runtime; none of it belongs in the APK.
+        exclude(group = "org.junit.jupiter")
+        exclude(group = "org.junit.platform")
+        exclude(group = "org.opentest4j")
+        exclude(group = "org.apiguardian")
+        exclude(group = "junit")
+    }
 }
