@@ -46,6 +46,9 @@ class UInputGamepad(
         // NOW's long-press threshold is the Android default (~500 ms); 900 ms clears it with
         // margin on a jittery stream without feeling sluggish.
         private const val START_HOLD_MS = 900L
+
+        // Desktop mode: how long the layer button's key is held when it is tapped.
+        private const val DESKTOP_TAP_MS = 60L
         private const val TRIGGER_PRESS_THRESHOLD = 30_000
         private const val TRIGGER_RELEASE_THRESHOLD = 28_500
         private const val TRIGGER_DEBOUNCE_MS = 12L
@@ -224,6 +227,10 @@ class UInputGamepad(
     // A neutral frame has been sent since output was last suppressed or the controller went away.
     private var neutralSent = false
 
+    // Desktop mode: the layer button's own key, pulsed on release (see pushMouseFrame).
+    private var desktopTapBit = 0
+    private var desktopTapUntil = 0L
+
     // Trigger / pad scroll: accumulator so we can convert continuous 0..32767 deltas into discrete wheel ticks
     private var scrollAccumulator: Int = 0
 
@@ -236,9 +243,11 @@ class UInputGamepad(
             ).daemon(true)
             .processNameSuffix("uinput")
             .debuggable(false)
-            // Bump whenever IUInputService changes: a stale user-service process would still be
-            // running the previous AIDL and silently fail or misroute every call below.
-            .version(4)
+            // Tied to the app version: the daemon user service survives an app update, and a stale
+            // one keeps the previous AIDL *and* the previous ShellAllowlist (e.g. without the
+            // appops entry the status pill needs) until reboot. A new version makes Shizuku
+            // replace it once per update.
+            .version(BuildConfig.VERSION_CODE)
 
     @Volatile private var deviceReady = false
 
@@ -522,6 +531,7 @@ class UInputGamepad(
         guideTapPending = false
         startTapPending = false
         startHoldUntil = 0L
+        desktopTapUntil = 0L
         holdHandler.removeCallbacks(startHoldRelease)
         resetPointerState()
         gyro.reset()
@@ -533,6 +543,7 @@ class UInputGamepad(
     fun pushNeutral() {
         val svc = service ?: return
         startHoldUntil = 0L
+        desktopTapUntil = 0L
         holdHandler.removeCallbacks(startHoldRelease)
         lastSourceButtons = 0L
         layerWasPressed = false
@@ -602,20 +613,7 @@ class UInputGamepad(
             layerSource?.let { sourceButtons and (1L shl it.key.ordinal) != 0L } == true
         if (layerPressed && !layerWasPressed) layerPressedAt = now
 
-        // Profile quick switch: layer button + D-pad left/right, edge-triggered. The chord
-        // consumes the press, so letting go of the layer button afterwards is not a tap.
-        val chordLeft = layerPressed && state.isButtonPressed(Buttons.DPAD_LEFT)
-        val chordRight = layerPressed && state.isButtonPressed(Buttons.DPAD_RIGHT)
-        if (chordLeft && !chordLeftWasDown) {
-            layerChordUsed = true
-            ProfileSwitcher.cycle(context, -1)
-        }
-        if (chordRight && !chordRightWasDown) {
-            layerChordUsed = true
-            ProfileSwitcher.cycle(context, +1)
-        }
-        chordLeftWasDown = chordLeft
-        chordRightWasDown = chordRight
+        updateProfileChord(layerPressed, state)
 
         if (!layerPressed && layerWasPressed && now - layerPressedAt < ACTION_LAYER_HOLD_MS && !layerChordUsed) {
             if (layerSource?.value == XboxTarget.GFN_LAYER) startTapPending = true else guideTapPending = true
@@ -890,6 +888,29 @@ class UInputGamepad(
         return relX to relY
     }
 
+    /**
+     * Profile quick switch: layer button + D-pad left/right, edge-triggered, in both gamepad and
+     * desktop mode. The chord consumes the press, so letting go of the layer button afterwards
+     * is not a tap.
+     */
+    private fun updateProfileChord(
+        layerPressed: Boolean,
+        state: SteamControllerState,
+    ) {
+        val chordLeft = layerPressed && state.isButtonPressed(Buttons.DPAD_LEFT)
+        val chordRight = layerPressed && state.isButtonPressed(Buttons.DPAD_RIGHT)
+        if (chordLeft && !chordLeftWasDown) {
+            layerChordUsed = true
+            ProfileSwitcher.cycle(context, -1)
+        }
+        if (chordRight && !chordRightWasDown) {
+            layerChordUsed = true
+            ProfileSwitcher.cycle(context, +1)
+        }
+        chordLeftWasDown = chordLeft
+        chordRightWasDown = chordRight
+    }
+
     /** Special actions are edge-triggered: they fire once, on the frame the source goes down. */
     private fun fireSpecialActionOnPress(
         target: XboxTarget,
@@ -958,18 +979,48 @@ class UInputGamepad(
         var keys = 0
 
         val sourceButtons = sourceButtons(state)
+        val now = android.os.SystemClock.uptimeMillis()
+
+        // The profile chord works here too: the button that owns the action layer in the gamepad
+        // mapping (Steam, usually), held with D-pad left/right. While a layer button exists its
+        // own desktop action fires on release instead of press, and only if no chord was made -
+        // otherwise holding it for the chord would already have sent Home.
+        val layer = layerSource()?.key
+        val layerBit = if (layer != null) 1L shl layer.ordinal else 0L
+        val layerPressed = layerBit != 0L && sourceButtons and layerBit != 0L
+        updateProfileChord(layerPressed, state)
+        val layerTapped = !layerPressed && layerWasPressed && !layerChordUsed
+        if (!layerPressed) layerChordUsed = false
+        layerWasPressed = layerPressed
+        if (layerTapped && layer != null) {
+            val target = cachedDesktopMapping[layer]
+            if (target != null && target.keyBit >= 0) {
+                desktopTapBit = target.keyBit
+                desktopTapUntil = now + DESKTOP_TAP_MS
+                holdHandler.removeCallbacks(startHoldRelease)
+                holdHandler.postDelayed(startHoldRelease, DESKTOP_TAP_MS + 30)
+            } else if (target != null && target.isSpecialAction) {
+                handleSpecialAction(target)
+            }
+        }
 
         // Desktop actions use the same persisted target IDs as gamepad mode, filtered to
         // keyboard and pointer actions by keyBit.
         for ((source, target) in cachedDesktopMapping) {
+            if (source == layer) continue // released as a tap above
             if (target.keyBit >= 0 && sourceButtons and (1L shl source.ordinal) != 0L) {
                 keys = keys or (1 shl target.keyBit)
             }
         }
+        if (desktopTapUntil != 0L) {
+            if (now < desktopTapUntil) keys = keys or (1 shl desktopTapBit) else desktopTapUntil = 0L
+        }
 
-        // Fixed DPAD → arrow keys
-        for ((mask, target) in MOUSE_MODE_FIXED_DPAD) {
-            if (state.isButtonPressed(mask)) keys = keys or (1 shl target.bit)
+        // Fixed DPAD → arrow keys, except while the D-pad belongs to the profile chord.
+        if (!layerPressed) {
+            for ((mask, target) in MOUSE_MODE_FIXED_DPAD) {
+                if (state.isButtonPressed(mask)) keys = keys or (1 shl target.bit)
+            }
         }
 
         // Left trackpad click → right mouse click
@@ -980,7 +1031,7 @@ class UInputGamepad(
         // Special actions (screenshot) still honoured via the gamepad mapping table -
         // keeps QA → screenshot working even in mouse mode.
         for ((source, target) in cachedDesktopMapping) {
-            if (target.isSpecialAction) {
+            if (target.isSpecialAction && source != layer) {
                 fireSpecialActionOnPress(target, 1L shl source.ordinal, sourceButtons)
             }
         }
