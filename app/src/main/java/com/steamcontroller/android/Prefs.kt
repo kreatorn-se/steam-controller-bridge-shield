@@ -234,6 +234,30 @@ object Prefs {
             .apply()
     }
 
+    // ─── Response curves (synced in profiles as lOuter/rOuter/lCurve/rCurve/padAccel) ──────
+    /** Outer deadzone: stick deflection (percent of full travel) that already counts as 100 %. 70..100. */
+    fun getStickOuter(context: Context, left: Boolean): Int =
+        prefs(context).getInt(if (left) "curve_left_outer" else "curve_right_outer", 100).coerceIn(70, 100)
+
+    fun setStickOuter(context: Context, left: Boolean, percent: Int) {
+        prefs(context).edit().putInt(if (left) "curve_left_outer" else "curve_right_outer", percent.coerceIn(70, 100)).apply()
+    }
+
+    /** Response exponent after the deadzones: 1 = linear, >1 = finer near centre, <1 = quicker. 0.5..3.0. */
+    fun getStickCurve(context: Context, left: Boolean): Float =
+        prefs(context).getFloat(if (left) "curve_left_exp" else "curve_right_exp", 1f).coerceIn(0.5f, 3f)
+
+    fun setStickCurve(context: Context, left: Boolean, exponent: Float) {
+        prefs(context).edit().putFloat(if (left) "curve_left_exp" else "curve_right_exp", exponent.coerceIn(0.5f, 3f)).apply()
+    }
+
+    /** Trackpad pointer acceleration: 0 = none, 2 = strong. */
+    fun getPadAcceleration(context: Context): Float = prefs(context).getFloat("curve_pad_accel", 0f).coerceIn(0f, 2f)
+
+    fun setPadAcceleration(context: Context, accel: Float) {
+        prefs(context).edit().putFloat("curve_pad_accel", accel.coerceIn(0f, 2f)).apply()
+    }
+
     // ─── Rumble intensity (0..100, % of game-requested magnitude) ───────────
     fun getRumbleIntensity(context: Context): Int = prefs(context).getInt(KEY_RUMBLE_INTENSITY, 100).coerceIn(0, 100)
 
