@@ -106,6 +106,8 @@ class MainActivity : AppCompatActivity(), Host {
     private var stickLeaked = false
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        // Show mode reads the triggers (LT/RT: previous/next collection); nothing else changes.
+        if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) show?.onMotion(ev)
         if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) {
             val hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X)
             val hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)

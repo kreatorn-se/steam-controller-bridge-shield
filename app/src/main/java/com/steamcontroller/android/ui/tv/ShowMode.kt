@@ -46,8 +46,9 @@ import kotlinx.coroutines.withContext
  *    consecutive captures are from the same game
  *  - ↓ a filmstrip of small thumbnails to jump in time, ↓ again a grid of larger ones;
  *    ↑ or B steps back out
- *  - ↑ (or Menu/Start) the options: play/pause, interval, Ken Burns
- *  - LB/RB the previous/next collection, Y favourite at any stage, B closes
+ *  - ↑ or B one step back (grid → filmstrip → picture → close), LB/RB step like ←/→
+ *  - Menu/Start the options (play/pause, time per picture, Ken Burns); +/− time per picture
+ *  - LT/RT the previous/next collection, Y favourite at any stage
  *
  * Selection inside the filmstrip and grid is drawn by hand rather than with Android focus, so
  * nothing here can lose or trap focus. The screen stays awake while it plays.
@@ -586,18 +587,27 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         bottomScrim.animate().alpha(0f).setDuration(700L).start()
     }
 
-    private fun updateHud(manual: Boolean) {
-        hudCount.text = ctx.getString(R.string.show_position, index + 1, items.size) + (if (next != null) "+" else "")
-        hudState.text = ctx.getString(if (playing) R.string.show_playing else R.string.show_paused)
-        hudState.setTextColor(if (playing) C.text else C.warning)
+    /** One quiet pill: "Paused" while paused, nothing while playing (device-api.md). */
+    private fun updateHud(@Suppress("UNUSED_PARAMETER") manual: Boolean) {
+        hudCount.visibility = View.GONE
+        hudState.text = ctx.getString(R.string.show_paused)
+        hudState.setTextColor(C.text)
         handler.removeCallbacks(hideHud)
-        if (!playing || manual) {
-            hud.animate().alpha(1f).setDuration(Motion.BASE).start()
-            if (playing) handler.postDelayed(hideHud, 2200L)
-        }
+        hud.animate().cancel()
+        hud.animate().alpha(if (playing) 0f else 1f).setDuration(Motion.BASE).start()
     }
 
-    private val hideHud = Runnable { if (playing) hud.animate().alpha(0f).setDuration(500L).start() }
+    /** A short note in the same pill (time per picture changed). */
+    private fun flashHud(text: String) {
+        hudState.text = text
+        hudState.setTextColor(C.text)
+        hud.animate().cancel()
+        hud.animate().alpha(1f).setDuration(Motion.BASE).start()
+        handler.removeCallbacks(hideHud)
+        handler.postDelayed(hideHud, 1600L)
+    }
+
+    private val hideHud = Runnable { if (playing) hud.animate().alpha(0f).setDuration(500L).start() else updateHud(false) }
 
     private fun setPlaying(on: Boolean, announce: Boolean = true) {
         playing = on
@@ -797,13 +807,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     private fun changeOption(d: Int) {
         when (optSel) {
             0 -> setPlaying(!playing)
-            1 -> {
-                val all = TvPrefs.INTERVALS
-                val i = all.indexOfFirst { it >= interval }.let { if (it < 0) all.size - 1 else it }
-                interval = all[(i + d).coerceIn(0, all.size - 1)]
-                TvPrefs.setInterval(ctx, interval)
-                if (playing) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
-            }
+            1 -> { stepInterval(d); return }
             2 -> {
                 TvPrefs.setKenBurns(ctx, !TvPrefs.kenBurns(ctx))
                 startKenBurns(front)
@@ -826,11 +830,12 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         }
         if (e.action != KeyEvent.ACTION_DOWN) return true
         val first = e.repeatCount == 0
+        if (bumper(k)) return true
         when {
             k == KeyEvent.KEYCODE_DPAD_LEFT -> left()
             k == KeyEvent.KEYCODE_DPAD_RIGHT -> right()
             k == KeyEvent.KEYCODE_DPAD_DOWN -> down()
-            k == KeyEvent.KEYCODE_DPAD_UP -> up()
+            k == KeyEvent.KEYCODE_DPAD_UP -> if (first || stage != Stage.NORMAL) up()
             !first -> {}
             Keys.isSelect(k) -> select()
             Keys.isPlayPause(k) -> setPlaying(!playing)
@@ -838,9 +843,40 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
             Keys.isPrevColl(k) -> switchColl(-1)
             Keys.isNextColl(k) -> switchColl(1)
             Keys.isMenu(k) -> setStage(if (stage == Stage.OPTIONS) Stage.NORMAL else Stage.OPTIONS)
+            Keys.isLonger(k) -> stepInterval(1)
+            Keys.isShorter(k) -> stepInterval(-1)
             k == KeyEvent.KEYCODE_BUTTON_X -> setPlaying(!playing)
         }
         return true
+    }
+
+    // LB/RB step like ←/→ (device-api.md); with repeat, so holding them scrubs.
+    private fun bumper(k: Int): Boolean = when (k) {
+        KeyEvent.KEYCODE_BUTTON_L1 -> { left(); true }
+        KeyEvent.KEYCODE_BUTTON_R1 -> { right(); true }
+        else -> false
+    }
+
+    private var ltDown = false
+    private var rtDown = false
+
+    /** LT/RT (analog on the virtual Xbox pad) jump to the previous/next collection. */
+    fun onMotion(ev: android.view.MotionEvent) {
+        if (closed) return
+        val lt = maxOf(ev.getAxisValue(android.view.MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(android.view.MotionEvent.AXIS_BRAKE))
+        val rt = maxOf(ev.getAxisValue(android.view.MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(android.view.MotionEvent.AXIS_GAS))
+        if (!ltDown && lt > 0.6f) { ltDown = true; switchColl(-1) } else if (ltDown && lt < 0.3f) ltDown = false
+        if (!rtDown && rt > 0.6f) { rtDown = true; switchColl(1) } else if (rtDown && rt < 0.3f) rtDown = false
+    }
+
+    private fun stepInterval(d: Int) {
+        val all = TvPrefs.INTERVALS
+        val i = all.indexOfFirst { it >= interval }.let { if (it < 0) all.size - 1 else it }
+        interval = all[(i + d).coerceIn(0, all.size - 1)]
+        TvPrefs.setInterval(ctx, interval)
+        if (playing && (stage == Stage.NORMAL || stage == Stage.OPTIONS)) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
+        renderOptions()
+        flashHud(ctx.getString(R.string.show_per_picture, interval))
     }
 
     private fun back() {
@@ -873,9 +909,10 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         }
     }
 
+    /** ↑ is one step back, like B: grid → filmstrip → picture → close. */
     private fun up() {
         when (stage) {
-            Stage.NORMAL -> setStage(Stage.OPTIONS)
+            Stage.NORMAL -> close()
             Stage.STRIP -> setStage(Stage.NORMAL)
             Stage.GRID -> if (sel < gridCols) setStage(Stage.STRIP) else moveSel(-gridCols)
             Stage.OPTIONS -> if (optSel > 0) { optSel--; renderOptions() }

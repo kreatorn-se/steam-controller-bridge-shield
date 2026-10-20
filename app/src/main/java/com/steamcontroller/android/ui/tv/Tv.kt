@@ -80,8 +80,11 @@ object Keys {
     fun isPlayPause(k: Int) = k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || k == KeyEvent.KEYCODE_MEDIA_PLAY ||
         k == KeyEvent.KEYCODE_MEDIA_PAUSE || k == KeyEvent.KEYCODE_SPACE
     fun isFavorite(k: Int) = k == KeyEvent.KEYCODE_BUTTON_Y
-    fun isPrevColl(k: Int) = k == KeyEvent.KEYCODE_BUTTON_L1 || k == KeyEvent.KEYCODE_MEDIA_PREVIOUS || k == KeyEvent.KEYCODE_PAGE_UP
-    fun isNextColl(k: Int) = k == KeyEvent.KEYCODE_BUTTON_R1 || k == KeyEvent.KEYCODE_MEDIA_NEXT || k == KeyEvent.KEYCODE_PAGE_DOWN
+    /** Collections: LT/RT when the pad sends them as keys (also read as axes), media and page keys. */
+    fun isPrevColl(k: Int) = k == KeyEvent.KEYCODE_BUTTON_L2 || k == KeyEvent.KEYCODE_MEDIA_PREVIOUS || k == KeyEvent.KEYCODE_PAGE_UP
+    fun isNextColl(k: Int) = k == KeyEvent.KEYCODE_BUTTON_R2 || k == KeyEvent.KEYCODE_MEDIA_NEXT || k == KeyEvent.KEYCODE_PAGE_DOWN
+    fun isLonger(k: Int) = k == KeyEvent.KEYCODE_PLUS || k == KeyEvent.KEYCODE_NUMPAD_ADD || k == KeyEvent.KEYCODE_EQUALS || k == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+    fun isShorter(k: Int) = k == KeyEvent.KEYCODE_MINUS || k == KeyEvent.KEYCODE_NUMPAD_SUBTRACT || k == KeyEvent.KEYCODE_MEDIA_REWIND
 }
 
 /** Pixel sizes images are decoded at, from dp. */
