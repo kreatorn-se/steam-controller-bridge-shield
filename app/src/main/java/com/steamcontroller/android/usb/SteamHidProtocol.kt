@@ -24,6 +24,12 @@ object SteamHidProtocol {
     // Steam Controller 2026 lizard-mode shutdown, matching Linux hid-steam.
     private val CLEAR_DIGITAL_MAPPINGS = byteArrayOf(0x81.toByte())
     private val GET_WIRELESS_STATE = byteArrayOf(0xB4.toByte())
+    private val GET_ATTRIBUTES_VALUES = byteArrayOf(0x83.toByte(), 0x00)
+    private const val ATTRIB_FIRMWARE_BUILD_TIME = 4
+
+    /** Puck slot wireless states (ID_DONGLE_GET_WIRELESS_STATE / report 0x79). */
+    const val WIRELESS_DISCONNECTED = 0x01
+    const val WIRELESS_CONNECTED = 0x02
     private val DISABLE_LIZARD_AND_WATCHDOG =
         byteArrayOf(
             0x87.toByte(),
@@ -94,6 +100,45 @@ object SteamHidProtocol {
             return null
         }
         return report[3].toInt().and(0xFF)
+    }
+
+    /**
+     * Firmware build time (unix seconds) from the controller's attribute table, or null.
+     * ID_GET_ATTRIBUTES_VALUES (0x83) answers [id, 0x83, length, {tag u8, value u32 le}...];
+     * tag 4 is ATTRIB_FIRMWARE_BUILD_TIME (SDL controller_constants.h, Linux hid-steam).
+     */
+    @Synchronized
+    fun getFirmwareBuildTime(
+        connection: UsbDeviceConnection,
+        interfaceId: Int,
+    ): Long? {
+        if (sendFeatureReport(connection, interfaceId, GET_ATTRIBUTES_VALUES) < 0) return null
+        val report = ByteArray(FEATURE_REPORT_SIZE)
+        val result =
+            connection.controlTransfer(
+                BM_REQUEST_TYPE_IN,
+                B_REQUEST_GET_REPORT,
+                W_VALUE_FEATURE_REPORT or REPORT_ID_FEATURES_CONTROLLER,
+                interfaceId,
+                report,
+                report.size,
+                TIMEOUT_MS,
+            )
+        if (result < 4 || report[1].toInt().and(0xFF) != GET_ATTRIBUTES_VALUES[0].toInt().and(0xFF)) return null
+        val end = minOf(3 + report[2].toInt().and(0xFF), result)
+        var i = 3
+        while (i + 5 <= end) {
+            if (report[i].toInt().and(0xFF) == ATTRIB_FIRMWARE_BUILD_TIME) {
+                val v =
+                    (report[i + 1].toLong() and 0xFF) or
+                        ((report[i + 2].toLong() and 0xFF) shl 8) or
+                        ((report[i + 3].toLong() and 0xFF) shl 16) or
+                        ((report[i + 4].toLong() and 0xFF) shl 24)
+                return v.takeIf { it > 0 }
+            }
+            i += 5
+        }
+        return null
     }
 
     fun sendTrackpadHaptic(

@@ -9,9 +9,10 @@ class UsbConnectionManager(
 ) {
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
 
-    var device: UsbDevice? = null
+    @Volatile var device: UsbDevice? = null
         private set
-    var connection: UsbDeviceConnection? = null
+
+    @Volatile var connection: UsbDeviceConnection? = null
         private set
 
     data class InputPipe(
@@ -20,7 +21,7 @@ class UsbConnectionManager(
         val endpointOut: UsbEndpoint?,
     )
 
-    var inputPipes: List<InputPipe> = emptyList()
+    @Volatile var inputPipes: List<InputPipe> = emptyList()
         private set
 
     // Interfaces claimed only to keep them away from the kernel - e.g. the Steam
@@ -43,10 +44,29 @@ class UsbConnectionManager(
             device.vendorId == STEAM_VID &&
                 device.productId in
                 setOf(PID_IBEX_WIRED, PID_PROTEUS_PUCK, PID_NEREID_RECEIVER)
+
+        /** The wireless puck / receiver (controller slots on ifaces 2..5), not a cable. */
+        fun isReceiver(device: UsbDevice): Boolean =
+            device.productId == PID_PROTEUS_PUCK || device.productId == PID_NEREID_RECEIVER
     }
 
-    fun findSteamController(): UsbDevice? = usbManager.deviceList.values.firstOrNull(::isSupportedDevice)
+    fun findSteamController(): UsbDevice? = findSteamControllers().firstOrNull()
 
+    /**
+     * Every attached Steam Controller device, a cable before a puck: a controller on a cable is
+     * certainly there, a puck may have nothing paired to it right now.
+     */
+    fun findSteamControllers(): List<UsbDevice> =
+        usbManager.deviceList.values
+            .filter(::isSupportedDevice)
+            .sortedBy { if (isReceiver(it)) 1 else 0 }
+
+    fun hasPermission(dev: UsbDevice): Boolean = usbManager.hasPermission(dev)
+
+    /** True while [dev] (by its bus path) is still attached. */
+    fun isAttached(dev: UsbDevice): Boolean = usbManager.deviceList.containsKey(dev.deviceName)
+
+    @Synchronized
     fun connect(dev: UsbDevice): Boolean {
         if (!usbManager.hasPermission(dev)) {
             Log.e(TAG, "No USB permission for device")
@@ -69,7 +89,7 @@ class UsbConnectionManager(
         }
 
         val wirelessStates =
-            if (dev.productId == PID_PROTEUS_PUCK || dev.productId == PID_NEREID_RECEIVER) {
+            if (isReceiver(dev)) {
                 pipes.associateWith { pipe ->
                     SteamHidProtocol.getWirelessState(conn, pipe.usbInterface.id).also { state ->
                         Log.i(
@@ -165,6 +185,7 @@ class UsbConnectionManager(
         }
     }
 
+    @Synchronized
     fun disconnect() {
         try {
             connection?.let { conn ->

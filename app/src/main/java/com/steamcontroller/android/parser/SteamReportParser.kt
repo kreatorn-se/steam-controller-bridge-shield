@@ -3,22 +3,38 @@ package com.steamcontroller.android.parser
 import android.util.Log
 
 /**
- * Dedicated battery/charge report (id 0x43). Two distinct physical sources feed this,
- * with different layouts - NOT the single [id, percent, chargeState] layout documented
- * for the older Steam Controller in SteamlessController's ControllerManager.cpp:
- *  - USB: a genuine 15-byte 0x43 report on the bulk endpoint, sent roughly every 3.5s.
- *    Empirically decoded from a real capture (percent pinned at 100 while charging over
- *    USB, byte[2] constant at 0x64=100 across all samples): percent is at byte[2].
- *  - BLE: BluetoothHidManager already extracts percent from the 14-byte 100f6c78
- *    characteristic and re-prefixes a compact synthetic [0x43, percent, 0x00] (3 bytes)
- *    before it reaches this parser - see its onCharacteristicChanged.
- * chargeState's real offset/encoding is unconfirmed on either path (unused elsewhere in
- * the app) - kept as a best-effort placeholder, 0 on the BLE synthetic report.
+ * Dedicated battery/charge report (id 0x43). Two distinct physical sources feed this:
+ *  - USB (puck slot or cable): a 15-byte report every few seconds, laid out as Valve's
+ *    TritonBatteryStatus_t (SDL3 SDL_hidapi_steam_triton.c, Linux hid-steam
+ *    steam_ibex_battery_status): [0x43, chargeState, batteryLevel %, battery mV (le16),
+ *    system mV, input mV, current, input current, temperature]. Matches the earlier hardware
+ *    capture (byte[2] pinned at 100 while charging).
+ *  - BLE: BluetoothHidManager extracts the percent from the 14-byte 100f6c78 characteristic and
+ *    re-prefixes a compact synthetic [0x43, percent, 0x00]; no charge state on that path.
+ *
+ * [chargeState] is Valve's EChargeState (0 reset, 1 discharging, 2 charging, 3 validating the
+ * source, 4 charging done) or -1 when the report does not carry it.
  */
 data class BatteryStatus(
     val percent: Int,
     val chargeState: Int,
-)
+) {
+    /** On external power (charging, validating the charger, or full); null when unknown. */
+    val charging: Boolean?
+        get() =
+            when (chargeState) {
+                CHARGE_DISCHARGING -> false
+                CHARGE_CHARGING, CHARGE_SRC_VALIDATE, CHARGE_DONE -> true
+                else -> null
+            }
+
+    companion object {
+        const val CHARGE_DISCHARGING = 1
+        const val CHARGE_CHARGING = 2
+        const val CHARGE_SRC_VALIDATE = 3
+        const val CHARGE_DONE = 4
+    }
+}
 
 object SteamReportParser {
     private const val TAG = "SteamReportParser"
@@ -32,9 +48,12 @@ object SteamReportParser {
         if (report.size < 3) return null
         if ((report[0].toInt() and 0xFF) != REPORT_BATTERY_STATUS) return null
         return if (report.size >= USB_BATTERY_REPORT_LEN) {
-            BatteryStatus(percent = report[2].toInt() and 0xFF, chargeState = report[3].toInt() and 0xFF)
+            BatteryStatus(
+                percent = (report[2].toInt() and 0xFF).coerceAtMost(100),
+                chargeState = report[1].toInt() and 0xFF,
+            )
         } else {
-            BatteryStatus(percent = report[1].toInt() and 0xFF, chargeState = 0)
+            BatteryStatus(percent = (report[1].toInt() and 0xFF).coerceAtMost(100), chargeState = -1)
         }
     }
 
