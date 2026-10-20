@@ -45,11 +45,22 @@ import com.steamcontroller.android.ui.theme.surface
 import com.steamcontroller.android.ui.widget.Anim
 import com.steamcontroller.android.ui.widget.DotView
 import com.steamcontroller.android.ui.widget.Kit
+import com.steamcontroller.android.ui.tv.HomePage
+import com.steamcontroller.android.ui.tv.HomeRepo
+import com.steamcontroller.android.ui.tv.Img
+import com.steamcontroller.android.ui.tv.InboxPage
+import com.steamcontroller.android.ui.tv.LibraryPage
+import com.steamcontroller.android.ui.tv.CollRef
+import com.steamcontroller.android.ui.tv.ShowMode
+import com.steamcontroller.android.ui.tv.ShowRequest
+import com.steamcontroller.android.ui.tv.Splash
 
 /**
- * The app shell: navigation rail, status strip and one page at a time (Controller, Test, Tuning,
- * Profiles, Device, Gamehub). Single activity so the live state, focus memory and side sheets are
- * shared; Calibration, the HID debug screen and the app picker remain their own activities.
+ * The app shell: navigation rail, status strip and one page at a time. Gamehub's sections (Home,
+ * Library, Inbox) on top, the controller bridge (Controller, Test, Tuning, Profiles, Device) and
+ * the hub link under Settings. Single activity so the live state, focus memory, side sheets and
+ * show mode are shared; Calibration, the HID debug screen and the app picker remain their own
+ * activities.
  */
 class MainActivity : AppCompatActivity(), Host {
 
@@ -58,15 +69,19 @@ class MainActivity : AppCompatActivity(), Host {
     override val service: ServiceControl get() = svc
     private lateinit var ticker: LiveTicker
     override val frame: LiveFrame get() = ticker.frame
-    private var cur: PageId = PageId.CONTROLLER
+    private var cur: PageId = PageId.HOME
     override val current: PageId get() = cur
 
     private val pages = HashMap<PageId, Page>()
     private lateinit var rail: NavRail
     private lateinit var pageFrame: FocusMemoryFrame
     private lateinit var overlay: FrameLayout
+    private lateinit var showLayer: FrameLayout
+    private lateinit var strip: View
     private lateinit var title: TextView
     private var sheet: Sheet? = null
+    private var show: ShowMode? = null
+    private var focusBeforeShow: View? = null
     private var resumed = false
 
     // status strip
@@ -74,6 +89,9 @@ class MainActivity : AppCompatActivity(), Host {
     private lateinit var profileChip: StripChip
     private lateinit var serviceChip: StripChip
     private lateinit var hubChip: StripChip
+    private lateinit var nowChip: StripChip
+    private var nowGame: String? = null
+    private val homeListener: (HomeRepo.State) -> Unit = { renderNow(it) }
     private var statusSeen = -1
     private var hubCheckedAt = 0L
     private var lastProfileKey: String? = null
@@ -103,8 +121,11 @@ class MainActivity : AppCompatActivity(), Host {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The manifest starts us on the launch theme (its window background is the splash mark).
+        setTheme(R.style.Theme_SteamController)
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, true)
+        Img.init(this)
         svc = ServiceControl(this) { ticker.invalidateSlow() }
         ticker = LiveTicker(this) { onFrame(it) }
         buildShell()
@@ -113,8 +134,10 @@ class MainActivity : AppCompatActivity(), Host {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = back()
         })
-        val start = savedInstanceState?.getString(KEY_PAGE)?.let { runCatching { PageId.valueOf(it) }.getOrNull() } ?: PageId.CONTROLLER
+        val start = savedInstanceState?.getString(KEY_PAGE)?.let { runCatching { PageId.valueOf(it) }.getOrNull() } ?: PageId.HOME
         go(start)
+        HomeRepo.observe(this, homeListener)
+        if (savedInstanceState == null) Splash.play(rootView)
         service.handleIntent(intent)
     }
 
@@ -135,9 +158,12 @@ class MainActivity : AppCompatActivity(), Host {
         ticker.start()
         pages[current]?.let { it.refresh(); it.onShow() }
         statusSeen = -1
+        HomeRepo.start(this)
     }
 
     override fun onPause() {
+        HomeRepo.stop()
+        show?.pause()
         pages[current]?.onHide()
         ticker.stop()
         ControllerLive.releaseOutput()
@@ -145,7 +171,13 @@ class MainActivity : AppCompatActivity(), Host {
         super.onPause()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        Img.trimMemory(level)
+    }
+
     override fun onDestroy() {
+        HomeRepo.remove(homeListener)
         service.unregister()
         super.onDestroy()
     }
@@ -159,36 +191,47 @@ class MainActivity : AppCompatActivity(), Host {
 
     // ── shell ─────────────────────────────────────────────────────────────────────────
 
+    private lateinit var rootView: FrameLayout
+
     private fun buildShell() {
         val safeH = resources.getDimensionPixelSize(R.dimen.safe_h)
         val safeV = resources.getDimensionPixelSize(R.dimen.safe_v)
         val stripH = dp(48)
         val root = FrameLayout(this).apply { background = Backdrop() }
+        rootView = root
 
-        rail = NavRail(this, onSelect = { go(it, focusContent = true) }, onRight = { focusPage() })
-        rail.attachPanel(root, safeH)
-
-        val main = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(safeH, safeV, safeH, safeV)
-            clipToPadding = false
-            clipChildren = false
-        }
-        main.addView(buildStrip(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, stripH))
+        // Pages fill the screen; each one is inset to the content area unless it is full-bleed.
         pageFrame = FocusMemoryFrame(this).apply { clipChildren = false; clipToPadding = false }
         pageFrame.fallback = { pages[cur]?.defaultFocus }
-        main.addView(pageFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-            marginStart = rail.collapsedWidth + dp(8)
-            topMargin = dp(10)
+        root.addView(pageFrame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        rail = NavRail(this, onSelect = { id, focusContent -> go(id, focusContent) }, onRight = { focusPage() })
+        rail.attachPanel(root, safeH, 1)
+
+        strip = buildStrip()
+        root.addView(strip, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, stripH, Gravity.TOP).apply {
+            setMargins(safeH, safeV, safeH, 0)
         })
-        root.addView(main, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(rail, FrameLayout.LayoutParams(rail.collapsedWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START or Gravity.TOP).apply {
             marginStart = safeH
             topMargin = safeV + stripH + dp(10)
+            bottomMargin = safeV
         })
         overlay = FrameLayout(this)
         root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        showLayer = FrameLayout(this)
+        root.addView(showLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
+    }
+
+    private fun pageParams(p: Page): FrameLayout.LayoutParams {
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        if (!p.fullBleed) {
+            val safeH = resources.getDimensionPixelSize(R.dimen.safe_h)
+            val safeV = resources.getDimensionPixelSize(R.dimen.safe_v)
+            lp.setMargins(safeH + rail.collapsedWidth + dp(8), safeV + dp(48 + 10), safeH, safeV)
+        }
+        return lp
     }
 
     private fun buildStrip(): View {
@@ -203,7 +246,14 @@ class MainActivity : AppCompatActivity(), Host {
         profileChip = StripChip(false).also { c -> c.setOnClickListener { openQuickSwitch() } }
         serviceChip = StripChip(true).also { c -> c.setOnClickListener { service.toggle(frame.serviceRunning) } }
         hubChip = StripChip(true).also { c -> c.setOnClickListener { go(PageId.GAMEHUB, focusContent = true) } }
-        for (c in listOf(linkChip, profileChip, serviceChip, hubChip)) chips.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
+        nowChip = StripChip(true).also { c ->
+            c.dot.color = C.success
+            c.dot.halo = true
+            c.label.setTextColor(C.success)
+            c.visibility = View.GONE
+            c.setOnClickListener { nowGame?.let { g -> openShow(ShowRequest(listOf(CollRef("game:$g", g)), 0)) } }
+        }
+        for (c in listOf(nowChip, linkChip, profileChip, serviceChip, hubChip)) chips.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
         val scroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
@@ -255,6 +305,19 @@ class MainActivity : AppCompatActivity(), Host {
         serviceChip.primary(!f.serviceRunning)
     }
 
+    /** The compact Now-playing chip: Steam presence via the hub's home. */
+    private fun renderNow(s: HomeRepo.State) {
+        val np = (s as? HomeRepo.State.Ready)?.home?.nowPlaying
+        nowGame = np?.game
+        if (np == null) {
+            if (nowChip.hasFocus()) linkChip.requestFocus()
+            nowChip.visibility = View.GONE
+            return
+        }
+        nowChip.label.text = getString(R.string.strip_now_playing, np.game)
+        nowChip.visibility = View.VISIBLE
+    }
+
     private fun renderHub() {
         val linked = GamehubStore.isLinked(this)
         hubChip.label.text = getString(R.string.nav_gamehub)
@@ -295,6 +358,9 @@ class MainActivity : AppCompatActivity(), Host {
             PageId.PROFILES -> ProfilesPage(this)
             PageId.DEVICE -> DevicePage(this)
             PageId.GAMEHUB -> GamehubPage(this)
+            PageId.HOME -> HomePage(this)
+            PageId.LIBRARY -> LibraryPage(this)
+            PageId.INBOX -> InboxPage(this)
         }
     }
 
@@ -306,9 +372,9 @@ class MainActivity : AppCompatActivity(), Host {
             val p = page(id)
             (p.view.parent as? ViewGroup)?.removeView(p.view)
             pageFrame.remembered = null
-            pageFrame.addView(p.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            pageFrame.addView(p.view, pageParams(p))
             Anim.fadeIn(p.view)
-            title.text = id.title
+            title.text = if (id == PageId.HOME) "" else id.title
             rail.setCurrent(id)
             p.refresh()
             if (resumed) p.onShow()
@@ -348,8 +414,32 @@ class MainActivity : AppCompatActivity(), Host {
 
     private fun setContentFocusBlocked(blocked: Boolean) {
         val mode = if (blocked) ViewGroup.FOCUS_BLOCK_DESCENDANTS else ViewGroup.FOCUS_AFTER_DESCENDANTS
-        (pageFrame.parent as ViewGroup).descendantFocusability = mode
+        pageFrame.descendantFocusability = mode
+        (strip as ViewGroup).descendantFocusability = mode
         rail.descendantFocusability = mode
+    }
+
+    // ── show mode ─────────────────────────────────────────────────────────────────────
+
+    override val showOpen: Boolean get() = show != null
+
+    override fun openShow(req: ShowRequest) {
+        if (req.siblings.isEmpty() || show != null) return
+        if (sheet != null) closeSheet(immediate = true)
+        focusBeforeShow = currentFocus
+        val s = ShowMode(this, req) { onShowClosed() }
+        show = s
+        showLayer.addView(s.root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        setContentFocusBlocked(true)
+        s.start()
+    }
+
+    private fun onShowClosed() {
+        show = null
+        setContentFocusBlocked(false)
+        val back = focusBeforeShow
+        focusBeforeShow = null
+        if (back != null && back.isAttachedToWindow && back.isShown) back.requestFocus() else focusPage()
     }
 
     override fun openQuickSwitch() = QuickSwitch.open(this)
@@ -396,16 +486,19 @@ class MainActivity : AppCompatActivity(), Host {
         for (p in pages.values) p.refresh()
     }
 
+    /** Back: overlays first (show mode, a sheet), then the page, then the rail, then Home, then out. */
     private fun back() {
+        show?.let { it.close(); return }
         if (sheet != null) { closeSheet(); return }
         val p = pages[current]
         if (p != null && p.onBack()) return
-        if (pageFrame.hasFocus()) { rail.focusCurrent(); return }
-        if (current != PageId.CONTROLLER) { go(PageId.CONTROLLER); rail.focusCurrent(); return }
+        if (pageFrame.hasFocus() || strip.hasFocus()) { rail.focusCurrent(); return }
+        if (current != PageId.HOME) { go(PageId.HOME); rail.focusCurrent(); return }
         finish()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        show?.let { if (it.onKey(event)) return true }
         val s = sheet
         if (s != null) {
             if (s.onKey?.invoke(event) == true) return true

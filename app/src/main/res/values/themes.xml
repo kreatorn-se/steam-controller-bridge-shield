@@ -59,6 +59,12 @@
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.SteamController.Dialog</item>
     </style>
 
+    <!-- Launch: the window background is the splash (bg + the G). MainActivity switches to
+         Theme.SteamController in onCreate, and ui/tv/Splash.kt takes over from the same frame. -->
+    <style name="Theme.Gamehub.Launch" parent="Theme.SteamController">
+        <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+
     <!-- Confirmations and name prompts: sheet surface, 12dp corners, accent text buttons. -->
     <style name="ThemeOverlay.SteamController.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
         <item name="colorSurface">@color/sheet</item>

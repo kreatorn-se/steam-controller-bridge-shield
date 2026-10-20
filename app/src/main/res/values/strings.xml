@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Steam Controller Bridge</string>
+    <string name="app_name">Gamehub</string>
 
     <!-- ━━━━━━━━━━━━ Service, notification, auto-start (runtime) ━━━━━━━━━━━━ -->
     <string name="status_disconnected">Disconnected</string>
@@ -10,22 +10,22 @@
     <string name="shizuku_not_running">Shizuku is not running. Please start Shizuku first.</string>
     <string name="shizuku_permission_denied">Shizuku permission denied</string>
     <string name="notification_channel_name">Controller Service</string>
-    <string name="notification_title">Steam Controller Bridge</string>
+    <string name="notification_title">Gamehub · Controller bridge</string>
     <string name="notif_mode_uinput">Emulating %1$s</string>
     <string name="notif_mode_inject">Fallback: Shizuku inject (limited)</string>
     <string name="notif_starting">Connecting…</string>
     <string name="autostart_channel_name">Controller auto-start</string>
     <string name="autostart_shizuku_advisory_title">Controller auto-start needs Shizuku</string>
-    <string name="autostart_shizuku_advisory_text">Start Shizuku, then open Steam Controller Bridge to restore controller input.</string>
+    <string name="autostart_shizuku_advisory_text">Start Shizuku, then open Gamehub to restore controller input.</string>
 
     <!-- ━━━━━━━━━━━━ Shizuku TV startup ━━━━━━━━━━━━ -->
     <string name="main_shizuku_open_failed">Could not open Shizuku</string>
     <string name="main_shizuku_store_failed">Could not open a store. Install Shizuku from GitHub.</string>
-    <string name="shizuku_starter_service_label">Steam Controller Bridge - Shizuku starter</string>
+    <string name="shizuku_starter_service_label">Gamehub - Shizuku starter</string>
     <string name="shizuku_starter_service_summary">Presses Shizuku\'s Start button so a TV remote is enough.</string>
     <string name="shizuku_starter_service_description">Shizuku\'s Start button cannot receive D-pad focus on Android TV. This helper sees only Shizuku and acts only briefly after you request it.</string>
     <string name="shizuku_starter_prompt_title">Let the app press Start for you</string>
-    <string name="shizuku_starter_prompt_message">Shizuku\'s Start button cannot be selected with a TV remote. Enable “Steam Controller Bridge - Shizuku starter” under Accessibility and this app will press it for you. It is restricted to Shizuku and only acts after you ask it to.</string>
+    <string name="shizuku_starter_prompt_message">Shizuku\'s Start button cannot be selected with a TV remote. Enable “Gamehub - Shizuku starter” under Accessibility and this app will press it for you. It is restricted to Shizuku and only acts after you ask it to.</string>
     <string name="shizuku_starter_prompt_open_settings">Open Accessibility settings</string>
     <string name="shizuku_starter_prompt_open_shizuku">Just open Shizuku</string>
     <string name="shizuku_starter_armed">Opening Shizuku and pressing Start</string>
@@ -189,7 +189,7 @@
     <string name="app_picker_gone">Profile no longer exists</string>
     <string name="app_picker_skip">Skip</string>
     <string name="app_picker_usage_title">Enable auto-switch?</string>
-    <string name="app_picker_usage_body">To swap profiles when you launch a bound app, allow Steam Controller Bridge “Usage data access” in Android settings. Without it the bindings are saved but nothing switches.</string>
+    <string name="app_picker_usage_body">To swap profiles when you launch a bound app, allow Gamehub “Usage data access” in Android settings. Without it the bindings are saved but nothing switches.</string>
     <plurals name="app_picker_saved">
         <item quantity="one">Bound to %1$d app</item>
         <item quantity="other">Bound to %1$d apps</item>
@@ -331,4 +331,89 @@
     <string name="hub_ago_min">%1$d min ago</string>
     <string name="hub_ago_h">%1$d h ago</string>
     <string name="hub_ago_days">%1$d days ago</string>
+
+    <!-- ━━━━━━━━━━━━ Gamehub on the TV: shell ━━━━━━━━━━━━ -->
+    <string name="nav_settings">Settings</string>
+    <string name="strip_now_playing">Now playing · %1$s</string>
+    <string name="dream_label">Gamehub</string>
+
+    <!-- ━━━━━━━━━━━━ Home ━━━━━━━━━━━━ -->
+    <string name="tv_play_show">Play slideshow</string>
+    <string name="tv_all_favourites">Favourites</string>
+    <string name="tv_favourites">Favourites</string>
+    <string name="tv_highlights">Highlights</string>
+    <string name="tv_hero_session">Latest session</string>
+    <string name="tv_hero_favourite">Favourite</string>
+    <string name="tv_hero_recent">Recent</string>
+    <string name="tv_now_playing_since">Now playing · %1$s</string>
+    <string name="tv_loading_eyebrow">Gamehub</string>
+    <string name="tv_loading_title">Loading your library…</string>
+    <string name="tv_link_eyebrow">Gamehub</string>
+    <string name="tv_link_title">Your captures, on the big screen</string>
+    <string name="tv_link_body">Link this Shield to Gamehub to show screenshots from the Shield, Steam and the Deck here, run slideshows for guests and sort the Inbox with the controller.</string>
+    <string name="tv_link_button">Link this Shield</string>
+    <string name="tv_relink_title">Link this Shield again</string>
+    <string name="tv_relink_body">Gamehub no longer accepts this Shield\'s key. Get a new code under Devices on the website.</string>
+    <string name="tv_controller_settings">Controller settings</string>
+    <string name="tv_update_eyebrow">Update Gamehub</string>
+    <string name="tv_update_title">Gamehub needs an update for the TV</string>
+    <string name="tv_update_body">This app talks to Gamehub\'s device API v1, which this hub does not have yet. Deploy the latest Gamehub, then try again. (%1$s)</string>
+    <string name="tv_try_again">Try again</string>
+    <string name="tv_offline_eyebrow">Offline</string>
+    <string name="tv_offline_title">Gamehub cannot be reached</string>
+    <string name="tv_offline_body">Check the network and try again. (%1$s)</string>
+    <string name="tv_status_saved">Saved copy · Gamehub unreachable</string>
+    <string name="tv_status_update">Saved copy · update Gamehub</string>
+    <string name="tv_empty_eyebrow">Gamehub</string>
+    <string name="tv_empty_title">No captures yet</string>
+    <string name="tv_empty_body">Take a screenshot with the controller\'s capture chord, or turn on Steam imports on the website. They will show up here.</string>
+    <string name="tv_go_home">Go to Home</string>
+
+    <!-- ━━━━━━━━━━━━ Show mode ━━━━━━━━━━━━ -->
+    <string name="show_loading">Loading…</string>
+    <string name="show_empty">Nothing here yet</string>
+    <string name="show_update">Gamehub needs an update to show this on the TV</string>
+    <string name="show_offline">Gamehub cannot be reached (%1$s)</string>
+    <string name="show_collection_of">Collection %1$d of %2$d · LB RB</string>
+    <string name="show_position">%1$d / %2$d</string>
+    <string name="show_playing">Playing</string>
+    <string name="show_paused">Paused</string>
+    <string name="show_fav_failed">Favourite not saved</string>
+    <string name="show_options">Slideshow</string>
+    <string name="show_options_keys">↑ ↓ choose · ← → change · B close</string>
+    <string name="show_opt_play">Slideshow</string>
+    <string name="show_opt_interval">Interval</string>
+    <string name="show_opt_kenburns">Ken Burns</string>
+    <string name="show_seconds">%1$d s</string>
+    <string name="show_on">On</string>
+    <string name="show_off">Off</string>
+
+    <!-- ━━━━━━━━━━━━ Inbox ━━━━━━━━━━━━ -->
+    <string name="inbox_title">Inbox</string>
+    <string name="inbox_games">Games</string>
+    <string name="inbox_total">%1$d to sort</string>
+    <string name="inbox_left">%1$d left</string>
+    <string name="inbox_keep">Keep</string>
+    <string name="inbox_skip">Skip</string>
+    <string name="inbox_fav">Favourite</string>
+    <string name="inbox_undo">Undo</string>
+    <string name="inbox_keep_all">Keep all %1$d</string>
+    <string name="inbox_kept_all">Kept %1$d · %2$s</string>
+    <string name="inbox_stamp_kept">Kept</string>
+    <string name="inbox_stamp_fav">Favourite</string>
+    <string name="inbox_stamp_skipped">Skipped</string>
+    <string name="inbox_stamp_undo">Back in the Inbox</string>
+    <string name="inbox_send_failed">Inbox change not saved</string>
+    <string name="inbox_clear_title">All sorted</string>
+    <string name="inbox_clear_body">Imports from Steam, the Deck and other sources land here to be kept or skipped.</string>
+    <string name="inbox_link_title">Link Gamehub first</string>
+    <string name="inbox_link_body">Link this Shield to Gamehub under Settings → Hub link.</string>
+
+    <!-- ━━━━━━━━━━━━ Library ━━━━━━━━━━━━ -->
+    <string name="lib_games">Games</string>
+    <string name="lib_albums">Albums</string>
+    <string name="lib_people">People</string>
+    <string name="lib_favourites">Favourites</string>
+    <string name="lib_empty">Nothing here yet.</string>
+    <string name="lib_update">Gamehub needs an update before the library can be shown on the TV.</string>
 </resources>

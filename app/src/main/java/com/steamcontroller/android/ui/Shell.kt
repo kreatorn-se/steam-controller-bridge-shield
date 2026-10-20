@@ -27,13 +27,20 @@ import com.steamcontroller.android.ui.theme.surface
 import com.steamcontroller.android.ui.widget.Kit
 import com.steamcontroller.android.ui.widget.setOnFocusChangeListenerChained
 
-enum class PageId(val title: String, val icon: Int) {
-    CONTROLLER("Controller", R.drawable.ic_nav_controller),
-    TEST("Test", R.drawable.ic_nav_test),
-    TUNING("Tuning", R.drawable.ic_nav_tuning),
-    PROFILES("Profiles", R.drawable.ic_nav_profiles),
-    DEVICE("Device", R.drawable.ic_nav_device),
-    GAMEHUB("Gamehub", R.drawable.ic_nav_gamehub),
+/**
+ * Top level: the Gamehub sections. [settings] pages are the controller bridge and the hub link,
+ * grouped under SETTINGS in the rail.
+ */
+enum class PageId(val title: String, val icon: Int, val settings: Boolean) {
+    HOME("Home", R.drawable.ic_nav_home, false),
+    LIBRARY("Library", R.drawable.ic_nav_library, false),
+    INBOX("Inbox", R.drawable.ic_nav_inbox, false),
+    CONTROLLER("Controller", R.drawable.ic_nav_controller, true),
+    TEST("Test", R.drawable.ic_nav_test, true),
+    TUNING("Tuning", R.drawable.ic_nav_tuning, true),
+    PROFILES("Profiles", R.drawable.ic_nav_profiles, true),
+    DEVICE("Device", R.drawable.ic_nav_device, true),
+    GAMEHUB("Hub link", R.drawable.ic_nav_gamehub, true),
 }
 
 /** What a page may ask of the shell. */
@@ -43,6 +50,9 @@ interface Host {
     val service: ServiceControl
     val current: PageId
     fun go(id: PageId, focusContent: Boolean = false)
+    /** Full-screen show mode over everything (Back closes it). */
+    fun openShow(req: com.steamcontroller.android.ui.tv.ShowRequest)
+    val showOpen: Boolean
     fun openSheet(sheet: Sheet)
     fun closeSheet()
     fun openQuickSwitch()
@@ -56,6 +66,8 @@ interface Host {
 abstract class Page(val host: Host) {
     val ctx: Context get() = host.activity
     abstract val view: View
+    /** Draws edge to edge under the status strip and the rail (the home hero). */
+    open val fullBleed: Boolean get() = false
     /** The page became visible with the activity resumed. */
     open fun onShow() {}
     /** The page is leaving, or the activity paused. */
@@ -114,21 +126,31 @@ open class FocusMemoryFrame(ctx: Context) : FrameLayout(ctx) {
 
 /**
  * Left navigation rail: icons when idle, icon + caps label while it holds focus (an overlay, so the
- * page does not reflow). Pages switch on select; the current one carries an accent bar.
+ * page does not reflow). HOME, LIBRARY and INBOX on top; below them SETTINGS, a single gear while
+ * you are in Gamehub and the six bridge pages while you are in one of them. Pages switch on
+ * select; the current one carries an accent bar.
  */
-class NavRail(ctx: Context, private val onSelect: (PageId) -> Unit, private val onRight: () -> Unit) : FocusMemoryFrame(ctx) {
+class NavRail(ctx: Context, private val onSelect: (PageId, Boolean) -> Unit, private val onRight: () -> Unit) : FocusMemoryFrame(ctx) {
     private val collapsedW = ctx.dp(64)
     private val expandedW = ctx.dp(204)
+    private val scroller = ScrollView(ctx)
     private val list = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
     private val items = LinkedHashMap<PageId, Item>()
+    private val rows = LinkedHashMap<PageId, View>()
+    private val settingsItem: Item
+    private val settingsRow: View
+    private val groupLabel: TextView = Kit.label(ctx, ctx.getString(R.string.nav_settings), 10.5f, C.text3)
     private val panel = View(ctx)
     private var expanded = false
-    var currentId: PageId = PageId.CONTROLLER
+    var currentId: PageId = PageId.HOME
+        private set
+    /** The bridge page the SETTINGS gear opens: the last one visited. */
+    var lastSettings: PageId = PageId.CONTROLLER
         private set
 
-    inner class Item(val id: PageId) : LinearLayout(context) {
+    inner class Item(val id: PageId?, title: String, iconRes: Int) : LinearLayout(context) {
         val icon = ImageView(context)
-        val label: TextView = Kit.label(context, id.title, 12.5f, C.text2)
+        val label: TextView = Kit.label(context, title, 12.5f, C.text2)
         val bar = View(context)
 
         init {
@@ -136,16 +158,16 @@ class NavRail(ctx: Context, private val onSelect: (PageId) -> Unit, private val 
             gravity = Gravity.CENTER_VERTICAL
             surface(radiusDp = 12f, fill = 0, stroke = 0, focusable = true, activeFill = C.surface2, scale = 1f)
             setPadding(context.dp(3 + 13), 0, context.dp(12), 0)
-            icon.setImageResource(id.icon)
+            icon.setImageResource(iconRes)
             addView(icon, LayoutParams(context.dp(22), context.dp(22)))
             addView(label, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = context.dp(16) })
             label.alpha = 0f
-            setOnClickListener { onSelect(id) }
+            setOnClickListener { if (id != null) onSelect(id, true) else onSelect(lastSettings, false) }
             setOnFocusChangeListenerChained { has ->
                 post { setExpanded(this@NavRail.hasFocus()) }
                 if (has) label.setTextColor(C.text) else render()
             }
-            contentDescription = id.title
+            contentDescription = title
         }
 
         fun render() {
@@ -160,6 +182,15 @@ class NavRail(ctx: Context, private val onSelect: (PageId) -> Unit, private val 
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) { onRight(); return true }
             return super.onKeyDown(keyCode, event)
         }
+    }
+
+    private fun rowFor(item: Item): View {
+        val row = FrameLayout(context)
+        item.bar.background = android.graphics.drawable.GradientDrawable().apply { setColor(C.accent); cornerRadius = context.dp(2f) }
+        row.addView(item, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(42)).apply { marginStart = context.dp(8) })
+        row.addView(item.bar, FrameLayout.LayoutParams(context.dp(3), context.dp(22), Gravity.CENTER_VERTICAL or Gravity.START))
+        list.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(42)).apply { bottomMargin = context.dp(2) })
+        return row
     }
 
     init {
@@ -178,33 +209,57 @@ class NavRail(ctx: Context, private val onSelect: (PageId) -> Unit, private val 
             @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
         }
         panel.alpha = 0f
-        for (id in PageId.values()) {
-            val item = Item(id)
-            items[id] = item
-            val row = FrameLayout(ctx)
-            item.bar.background = android.graphics.drawable.GradientDrawable().apply { setColor(C.accent); cornerRadius = ctx.dp(2f) }
-            row.addView(item, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(50)).apply { marginStart = ctx.dp(8) })
-            row.addView(item.bar, FrameLayout.LayoutParams(ctx.dp(3), ctx.dp(24), Gravity.CENTER_VERTICAL or Gravity.START))
-            list.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(50)).apply { bottomMargin = ctx.dp(4) })
-        }
-        addView(list, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        for (id in PageId.values().filter { !it.settings }) { val item = Item(id, id.title, id.icon); items[id] = item; rows[id] = rowFor(item) }
+        // SETTINGS: a hairline while collapsed, the caps label while expanded.
+        val sep = FrameLayout(ctx)
+        sep.addView(View(ctx).apply { setBackgroundColor(C.lineStrong) }, FrameLayout.LayoutParams(ctx.dp(22), ctx.dp(1), Gravity.CENTER_VERTICAL or Gravity.START).apply { marginStart = ctx.dp(8 + 3 + 13) })
+        groupLabel.alpha = 0f
+        sep.addView(groupLabel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL or Gravity.START).apply { marginStart = ctx.dp(8 + 3 + 13 + 22 + 16) })
+        list.addView(sep, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(20)))
+        settingsItem = Item(null, ctx.getString(R.string.nav_settings), R.drawable.ic_nav_settings)
+        settingsRow = rowFor(settingsItem)
+        for (id in PageId.values().filter { it.settings }) { val item = Item(id, id.title, id.icon); items[id] = item; rows[id] = rowFor(item) }
+        scroller.isVerticalScrollBarEnabled = false
+        scroller.clipChildren = false
+        scroller.clipToPadding = false
+        scroller.overScrollMode = OVER_SCROLL_NEVER
+        scroller.addView(list)
+        addView(scroller, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         fallback = { items[currentId] }
+        applyGroup()
         render()
     }
 
-    fun attachPanel(parent: FrameLayout, leftInset: Int) {
-        parent.addView(panel, 0, FrameLayout.LayoutParams(leftInset + expandedW + context.dp(80), ViewGroup.LayoutParams.MATCH_PARENT))
+    fun attachPanel(parent: FrameLayout, leftInset: Int, index: Int) {
+        parent.addView(panel, index, FrameLayout.LayoutParams(leftInset + expandedW + context.dp(80), ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     fun setCurrent(id: PageId) {
         currentId = id
+        if (id.settings) lastSettings = id
         remembered = items[id]
+        // Move focus to the new item before the group it was in can disappear under it.
+        val hadFocus = hasFocus()
+        rows[id]?.visibility = VISIBLE
+        if (hadFocus) items[id]?.requestFocus()
+        applyGroup()
         render()
+    }
+
+    /** The six bridge pages show only while one of them is current; otherwise the gear stands in. */
+    private fun applyGroup() {
+        val inSettings = currentId.settings
+        settingsRow.visibility = if (inSettings) GONE else VISIBLE
+        for ((id, row) in rows) if (id.settings) {
+            val v = if (inSettings) VISIBLE else GONE
+            if (row.visibility != v && v == VISIBLE) { row.alpha = 0f; row.animate().alpha(1f).setDuration(Motion.SLOW).start() }
+            row.visibility = v
+        }
     }
 
     fun focusCurrent() { items[currentId]?.requestFocus() }
 
-    private fun render() = items.values.forEach { it.render() }
+    private fun render() { items.values.forEach { it.render() }; settingsItem.render() }
 
     private fun setExpanded(e: Boolean) {
         if (e == expanded) return
@@ -218,7 +273,8 @@ class NavRail(ctx: Context, private val onSelect: (PageId) -> Unit, private val 
             start()
         }
         panel.animate().alpha(if (e) 1f else 0f).setDuration(if (e) Motion.BASE else Motion.FAST).start()
-        for (it in items.values) it.label.animate().alpha(if (e) 1f else 0f).setDuration(if (e) Motion.SLOW else Motion.FAST).start()
+        val labels = items.values.map { it.label } + settingsItem.label + groupLabel
+        for (it in labels) it.animate().alpha(if (e) 1f else 0f).setDuration(if (e) Motion.SLOW else Motion.FAST).start()
     }
 
     val collapsedWidth get() = collapsedW

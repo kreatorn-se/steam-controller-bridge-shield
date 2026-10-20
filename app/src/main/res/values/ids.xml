@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ui/tv/Img: the image a view is bound to, so a late result never lands on a re-bound view. -->
+    <item name="img_key" type="id" />
+</resources>

@@ -36,8 +36,8 @@ android {
         applicationId = "io.github.lluppi.steamcontrollerbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.3.0"
+        versionCode = 6
+        versionName = "1.4.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -131,6 +131,8 @@ dependencies {
     implementation(libs.shizuku.provider)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // Recycling rows and grids for the Gamehub TV screens (60 fps with hundreds of captures).
+    implementation(libs.androidx.recyclerview)
     // Talks ADB to the Shield itself to start Shizuku after a reboot (ShizukuAdbStarter).
     implementation("dev.mobile:dadb:1.2.9") {
         // dadb's published POM drags its JUnit 5 test stack into runtime; none of it belongs in the APK.

@@ -67,7 +67,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Gamehub.Launch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -125,6 +126,22 @@
             android:name=".service.ShizukuRetryReceiver"
             android:enabled="true"
             android:exported="false" />
+
+        <!-- Gamehub as the system screen saver. Shield: Settings → Device Preferences →
+             Screen saver → Screen saver → Gamehub. -->
+        <service
+            android:name=".screensaver.GamehubDream"
+            android:exported="true"
+            android:label="@string/dream_label"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.dream"
+                android:resource="@xml/gamehub_dream" />
+        </service>
 
         <service
             android:name=".service.ControllerService"

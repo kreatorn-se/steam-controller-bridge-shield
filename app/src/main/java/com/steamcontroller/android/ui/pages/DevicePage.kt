@@ -156,7 +156,7 @@ class DevicePage(host: Host) : Page(host) {
         add(right, ActionRow(ctx, ctx.getString(R.string.dev_debug), ctx.getString(R.string.dev_debug_hint)) {
             ctx.startActivity(Intent(ctx, DebugActivity::class.java))
         })
-        add(right, ActionRow(ctx, ctx.getString(R.string.dev_about), "Steam Controller Bridge ${BuildConfig.VERSION_NAME}", ctx.getString(R.string.dev_source)) {
+        add(right, ActionRow(ctx, ctx.getString(R.string.dev_about), "Gamehub ${BuildConfig.VERSION_NAME} · controller bridge", ctx.getString(R.string.dev_source)) {
             try {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB)))
             } catch (_: Throwable) {
