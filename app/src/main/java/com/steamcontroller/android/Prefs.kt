@@ -579,6 +579,11 @@ object Prefs {
             gyroBiasX = gyro.biasX,
             gyroBiasY = gyro.biasY,
             boundPackages = boundPkgs,
+            leftOuter = getStickOuter(context, true),
+            rightOuter = getStickOuter(context, false),
+            leftCurve = getStickCurve(context, true),
+            rightCurve = getStickCurve(context, false),
+            padAccel = getPadAcceleration(context),
         )
     }
 
@@ -620,6 +625,11 @@ object Prefs {
         setGyroResponse(context, profile.gyroResponse)
         setGyroInvertY(context, profile.gyroInvertY)
         setGyroBias(context, profile.gyroBiasX, profile.gyroBiasY)
+        setStickOuter(context, true, profile.leftOuter)
+        setStickOuter(context, false, profile.rightOuter)
+        setStickCurve(context, true, profile.leftCurve)
+        setStickCurve(context, false, profile.rightCurve)
+        setPadAcceleration(context, profile.padAccel)
         SteamButton.values().forEach { btn ->
             profile.mapping[btn.name]?.let { stored ->
                 setMapping(context, btn, XboxTarget.fromPersisted(stored) ?: XboxTarget.NONE)

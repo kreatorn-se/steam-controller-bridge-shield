@@ -35,6 +35,12 @@ object BackupManager {
             put("rumbleIntensity", Prefs.getRumbleIntensity(context))
             put("mouseSensitivity", Prefs.getMouseSensitivity(context).toDouble())
             put("trackpadAsMouse", Prefs.getTrackpadAsMouseInGamepad(context))
+            // Response curves, same keys as in a NamedProfile.
+            put(NamedProfile.KEY_L_OUTER, Prefs.getStickOuter(context, true))
+            put(NamedProfile.KEY_R_OUTER, Prefs.getStickOuter(context, false))
+            put(NamedProfile.KEY_L_CURVE, Prefs.getStickCurve(context, true).toDouble())
+            put(NamedProfile.KEY_R_CURVE, Prefs.getStickCurve(context, false).toDouble())
+            put(NamedProfile.KEY_PAD_ACCEL, Prefs.getPadAcceleration(context).toDouble())
             val gyro = Prefs.getGyroTuning(context)
             put(
                 "gyro",
@@ -118,6 +124,33 @@ object BackupManager {
                 Prefs.setTrackpadAsMouseInGamepad(
                     context,
                     live.optBoolean("trackpadAsMouse", true)
+                )
+            }
+            // Response curves: optional, so an older backup or hub config leaves them alone.
+            if (live.has(NamedProfile.KEY_L_OUTER)) {
+                Prefs.setStickOuter(context, true, NamedProfile.clampOuter(live.optInt(NamedProfile.KEY_L_OUTER, 100)))
+            }
+            if (live.has(NamedProfile.KEY_R_OUTER)) {
+                Prefs.setStickOuter(context, false, NamedProfile.clampOuter(live.optInt(NamedProfile.KEY_R_OUTER, 100)))
+            }
+            if (live.has(NamedProfile.KEY_L_CURVE)) {
+                Prefs.setStickCurve(
+                    context,
+                    true,
+                    NamedProfile.clampCurve(live.optDouble(NamedProfile.KEY_L_CURVE, 1.0).toFloat()),
+                )
+            }
+            if (live.has(NamedProfile.KEY_R_CURVE)) {
+                Prefs.setStickCurve(
+                    context,
+                    false,
+                    NamedProfile.clampCurve(live.optDouble(NamedProfile.KEY_R_CURVE, 1.0).toFloat()),
+                )
+            }
+            if (live.has(NamedProfile.KEY_PAD_ACCEL)) {
+                Prefs.setPadAcceleration(
+                    context,
+                    NamedProfile.clampPadAccel(live.optDouble(NamedProfile.KEY_PAD_ACCEL, 0.0).toFloat()),
                 )
             }
             live.optJSONObject("gyro")?.let { gyro ->

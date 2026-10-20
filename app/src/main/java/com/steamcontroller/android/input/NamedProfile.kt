@@ -43,7 +43,16 @@ data class NamedProfile(
     val gyroInvertY: Boolean = false,
     val gyroBiasX: Float = 0f,
     val gyroBiasY: Float = 0f,
-    val boundPackages: List<String> = emptyList()
+    val boundPackages: List<String> = emptyList(),
+    // Response curves (JSON lOuter/rOuter/lCurve/rCurve/padAccel; optional, defaults = off).
+    /** Outer deadzone, percent of stick travel that already counts as full deflection. 70..100. */
+    val leftOuter: Int = 100,
+    val rightOuter: Int = 100,
+    /** Response exponent after the deadzones. 0.5..3, 1 = linear. */
+    val leftCurve: Float = 1f,
+    val rightCurve: Float = 1f,
+    /** Trackpad pointer acceleration. 0..2, 0 = none. */
+    val padAccel: Float = 0f
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put(KEY_ID, id)
@@ -74,6 +83,11 @@ data class NamedProfile(
         put(KEY_GYRO_BIAS_X, gyroBiasX.toDouble())
         put(KEY_GYRO_BIAS_Y, gyroBiasY.toDouble())
         put(KEY_BOUND, JSONArray(boundPackages))
+        put(KEY_L_OUTER, leftOuter)
+        put(KEY_R_OUTER, rightOuter)
+        put(KEY_L_CURVE, leftCurve.toDouble())
+        put(KEY_R_CURVE, rightCurve.toDouble())
+        put(KEY_PAD_ACCEL, padAccel.toDouble())
     }
 
     companion object {
@@ -105,6 +119,15 @@ data class NamedProfile(
         private const val KEY_GYRO_BIAS_X = "gyroBiasX"
         private const val KEY_GYRO_BIAS_Y = "gyroBiasY"
         private const val KEY_BOUND = "boundPackages"
+        const val KEY_L_OUTER = "lOuter"
+        const val KEY_R_OUTER = "rOuter"
+        const val KEY_L_CURVE = "lCurve"
+        const val KEY_R_CURVE = "rCurve"
+        const val KEY_PAD_ACCEL = "padAccel"
+
+        fun clampOuter(v: Int): Int = v.coerceIn(70, 100)
+        fun clampCurve(v: Float): Float = if (v.isNaN()) 1f else v.coerceIn(0.5f, 3f)
+        fun clampPadAccel(v: Float): Float = if (v.isNaN()) 0f else v.coerceIn(0f, 2f)
 
         private fun parseMapping(obj: JSONObject?): Map<String, String> {
             val source = obj ?: return emptyMap()
@@ -157,7 +180,12 @@ data class NamedProfile(
                 gyroInvertY = obj.optBoolean(KEY_GYRO_INVERT_Y, false),
                 gyroBiasX = obj.optDouble(KEY_GYRO_BIAS_X, 0.0).toFloat(),
                 gyroBiasY = obj.optDouble(KEY_GYRO_BIAS_Y, 0.0).toFloat(),
-                boundPackages = bound
+                boundPackages = bound,
+                leftOuter = clampOuter(obj.optInt(KEY_L_OUTER, 100)),
+                rightOuter = clampOuter(obj.optInt(KEY_R_OUTER, 100)),
+                leftCurve = clampCurve(obj.optDouble(KEY_L_CURVE, 1.0).toFloat()),
+                rightCurve = clampCurve(obj.optDouble(KEY_R_CURVE, 1.0).toFloat()),
+                padAccel = clampPadAccel(obj.optDouble(KEY_PAD_ACCEL, 0.0).toFloat())
             )
         }
 
