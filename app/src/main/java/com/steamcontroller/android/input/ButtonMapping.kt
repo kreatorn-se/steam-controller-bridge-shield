@@ -144,7 +144,15 @@ enum class XboxTarget(
 
     // Special actions (mask < 0, no keyBit). Edge-triggered on press in Kotlin.
     SCREENSHOT(-1, "📸 Take screenshot"),
-    GUIDE_LAYER(-2, "Guide tap / action layer hold");
+    GUIDE_LAYER(-2, "Guide tap / action layer hold"),
+
+    // GeForce NOW on Shield opens its in-game overlay on a *long press* of Start, and the
+    // system swallows Guide (KEYCODE_BUTTON_MODE) as Home before any app sees it. These two
+    // synthesise that long press so a single tap of any button (typically Steam) reaches the
+    // overlay. START_HOLD is the plain action; GFN_LAYER adds the paddle action layer on hold,
+    // exactly like GUIDE_LAYER does for Guide.
+    START_HOLD(-3, "⏱ Hold Start (GFN overlay)"),
+    GFN_LAYER(-4, "GFN overlay tap / action layer hold");
 
     /** Handled in Kotlin rather than emitted as a button, key or trigger. */
     val isSpecialAction: Boolean get() = mask < 0 && keyBit < 0 && triggerSide == 0

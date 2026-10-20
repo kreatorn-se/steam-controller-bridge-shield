@@ -242,6 +242,8 @@ class MappingActivity : AppCompatActivity() {
         XboxTarget.THUMBR -> "R3"
         XboxTarget.SCREENSHOT -> "📸"
         XboxTarget.GUIDE_LAYER -> "LYR"
+        XboxTarget.START_HOLD -> "≡⏱"
+        XboxTarget.GFN_LAYER -> "GFN"
         XboxTarget.KB_UP -> "↑"
         XboxTarget.KB_DOWN -> "↓"
         XboxTarget.KB_LEFT -> "←"

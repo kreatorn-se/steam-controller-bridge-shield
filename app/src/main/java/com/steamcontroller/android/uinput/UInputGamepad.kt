@@ -39,6 +39,11 @@ class UInputGamepad(
         // writing the literal string "null".
         private const val SHOW_IME_UNSET_SENTINEL = "__unset__"
         private const val ACTION_LAYER_HOLD_MS = 250L
+
+        // How long the synthesised Start press is held for START_HOLD / GFN_LAYER taps. GeForce
+        // NOW's long-press threshold is the Android default (~500 ms); 900 ms clears it with
+        // margin on a jittery stream without feeling sluggish.
+        private const val START_HOLD_MS = 900L
         private const val TRIGGER_PRESS_THRESHOLD = 30_000
         private const val TRIGGER_RELEASE_THRESHOLD = 28_500
         private const val TRIGGER_DEBOUNCE_MS = 12L
@@ -95,6 +100,8 @@ class UInputGamepad(
                 }
             }
 
+            XboxTarget.START_HOLD -> beginStartHold(android.os.SystemClock.uptimeMillis())
+
             else -> {}
         }
     }
@@ -132,6 +139,20 @@ class UInputGamepad(
     private var layerPressedAt = 0L
     private var layerWasPressed = false
     private var guideTapPending = false
+    private var startTapPending = false
+    // uptimeMillis until which a synthesised Start press stays down; 0 = none in flight.
+    private var startHoldUntil = 0L
+    // Last report seen, re-pushed by the release timer below so the synthesised Start is let
+    // go on time even if the controller happens to go quiet (release is otherwise frame-driven).
+    private var lastState: SteamControllerState? = null
+    private val holdHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val startHoldRelease = Runnable { lastState?.let { pushFrame(it) } }
+
+    private fun beginStartHold(now: Long) {
+        startHoldUntil = now + START_HOLD_MS
+        holdHandler.removeCallbacks(startHoldRelease)
+        holdHandler.postDelayed(startHoldRelease, START_HOLD_MS + 30)
+    }
     private val leftTriggerButton = AnalogButtonDebouncer()
     private val rightTriggerButton = AnalogButtonDebouncer()
 
@@ -373,8 +394,10 @@ class UInputGamepad(
     }
 
     // Push one HID frame from the SC2026 parser, translated to Xbox 360 layout.
+    @Synchronized
     fun pushFrame(state: SteamControllerState) {
         val svc = service ?: return
+        lastState = state
 
         // Refresh cached calibrations + button mapping from prefs at most every 250ms
         val now = android.os.SystemClock.uptimeMillis()
@@ -410,12 +433,17 @@ class UInputGamepad(
         var ltOverride = 0
         var rtOverride = 0
         val sourceButtons = sourceButtons(state)
-        val layerSource = cachedMapping.entries.firstOrNull { it.value == XboxTarget.GUIDE_LAYER }
+        // Either layer target may own the action layer; GUIDE_LAYER taps Guide, GFN_LAYER
+        // taps a synthesised long-press of Start (see START_HOLD).
+        val layerSource =
+            cachedMapping.entries.firstOrNull {
+                it.value == XboxTarget.GUIDE_LAYER || it.value == XboxTarget.GFN_LAYER
+            }
         val layerPressed =
             layerSource?.let { sourceButtons and (1L shl it.key.ordinal) != 0L } == true
         if (layerPressed && !layerWasPressed) layerPressedAt = now
         if (!layerPressed && layerWasPressed && now - layerPressedAt < ACTION_LAYER_HOLD_MS) {
-            guideTapPending = true
+            if (layerSource?.value == XboxTarget.GFN_LAYER) startTapPending = true else guideTapPending = true
         }
         val layerActive = layerPressed && now - layerPressedAt >= ACTION_LAYER_HOLD_MS
         layerWasPressed = layerPressed
@@ -423,9 +451,17 @@ class UInputGamepad(
             xboxButtons = xboxButtons or XboxTarget.MODE.mask
             guideTapPending = false
         }
+        if (startTapPending) {
+            beginStartHold(now)
+            startTapPending = false
+        }
+        if (startHoldUntil != 0L) {
+            if (now < startHoldUntil) xboxButtons = xboxButtons or XboxTarget.START.mask
+            else startHoldUntil = 0L
+        }
 
         for ((source, baseTarget) in cachedMapping) {
-            if (baseTarget == XboxTarget.GUIDE_LAYER) continue
+            if (baseTarget == XboxTarget.GUIDE_LAYER || baseTarget == XboxTarget.GFN_LAYER) continue
             val target = if (layerActive) DEFAULT_ACTION_LAYER[source] ?: baseTarget else baseTarget
             val sourceBit = 1L shl source.ordinal
             val pressed = sourceButtons and sourceBit != 0L
