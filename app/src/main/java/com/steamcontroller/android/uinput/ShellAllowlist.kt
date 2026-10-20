@@ -10,6 +10,7 @@ import com.steamcontroller.android.BuildConfig
  * - `screencap -p` into the app's own Gamehub upload queue (Android/data/<app>/files/captures)
  * - `settings get|put|delete secure show_ime_with_hard_keyboard` (UInputGamepad)
  * - `cmd deviceidle whitelist +<this app>` so Android may restart the service after a kill
+ * - `appops set <this app> SYSTEM_ALERT_WINDOW allow` so the status pill can draw above games
  *
  * Adding a system action means adding its exact shape here.
  */
@@ -45,6 +46,10 @@ internal object ShellAllowlist {
             }
 
             args == listOf("cmd", "deviceidle", "whitelist", "+${BuildConfig.APPLICATION_ID}") -> {
+                true
+            }
+
+            args == listOf("appops", "set", BuildConfig.APPLICATION_ID, "SYSTEM_ALERT_WINDOW", "allow") -> {
                 true
             }
 

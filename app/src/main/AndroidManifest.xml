@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The status pill (ui/pill) draws above GeForce NOW in an overlay window. Granted at service
+         start through the shell-uid service: appops set <app> SYSTEM_ALERT_WINDOW allow. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Start the controller service at boot or when its Bluetooth controller connects.
          Shizuku must be running before either background start can create a virtual device. -->
