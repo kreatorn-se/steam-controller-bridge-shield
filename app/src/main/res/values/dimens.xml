@@ -29,13 +29,13 @@
     <dimen name="label_size">11sp</dimen>
 
     <!-- ── Cards ───────────────────────────────────────────────────────────────── -->
-    <dimen name="card_radius">18dp</dimen>
+    <dimen name="card_radius">6dp</dimen>
     <dimen name="card_pad">16dp</dimen>
     <dimen name="focus_stroke">3dp</dimen>
 
     <!-- ── Circular icon buttons ───────────────────────────────────────────────── -->
     <dimen name="icon_button_size">48dp</dimen>
-    <dimen name="icon_button_radius">24dp</dimen>
+    <dimen name="icon_button_radius">6dp</dimen>
     <dimen name="icon_button_glyph_pad">13dp</dimen>
     <dimen name="icon_button_gap">8dp</dimen>
 
@@ -47,7 +47,7 @@
 
     <!-- ── Segmented toggle rows ───────────────────────────────────────────────── -->
     <dimen name="segment_height">48dp</dimen>
-    <dimen name="segment_radius">14dp</dimen>
+    <dimen name="segment_radius">4dp</dimen>
     <dimen name="segment_text_size">13sp</dimen>
     <dimen name="segment_icon_size">18dp</dimen>
 
@@ -59,10 +59,10 @@
     <!-- ── Big Start/Stop button ───────────────────────────────────────────────── -->
     <dimen name="big_button_height">56dp</dimen>
     <dimen name="big_button_text_size">16sp</dimen>
-    <dimen name="big_button_radius">18dp</dimen>
+    <dimen name="big_button_radius">4dp</dimen>
 
     <!-- ── Status pill ─────────────────────────────────────────────────────────── -->
-    <dimen name="pill_radius">14dp</dimen>
+    <dimen name="pill_radius">4dp</dimen>
     <dimen name="pill_pad_h">16dp</dimen>
     <dimen name="pill_pad_v">12dp</dimen>
     <dimen name="pill_text_size">13sp</dimen>
@@ -74,7 +74,7 @@
     <!-- Circle shrunk, glyph NOT: 28 - 2x5 = 18dp of glyph, exactly what the old 32dp badge
          with a 7dp pad produced. Only the disc behind it changes size. -->
     <dimen name="action_badge_size">28dp</dimen>
-    <dimen name="action_badge_radius">14dp</dimen>
+    <dimen name="action_badge_radius">4dp</dimen>
     <dimen name="action_glyph_pad">5dp</dimen>
     <dimen name="action_gap">8dp</dimen>
     <dimen name="action_label_size">12sp</dimen>
@@ -110,7 +110,7 @@
          rather than a field with an unrelated circle floating beside it. -->
     <dimen name="bt_row_gap">10dp</dimen>
     <dimen name="bt_field_height">56dp</dimen>
-    <dimen name="bt_refresh_radius">28dp</dimen>
+    <dimen name="bt_refresh_radius">6dp</dimen>
     <!-- The picker draws its visible outline below the top of its own bounds - Material floats
          the hint onto the border, so the box starts about half a label-height down (measured
          at 11px on the shield). The refresh circle is not inside that field, so without this

@@ -214,6 +214,7 @@ class ControllerService : Service() {
         usbManager = UsbConnectionManager(this)
         btManager = BluetoothHidManager(this)
         uinput = UInputGamepad(this, Prefs.getProfile(this))
+        com.steamcontroller.android.hub.GamehubSync.start(this)
         uinput.onRumble = { strong, weak -> forwardRumble(strong, weak) }
         createNotificationChannel()
         _serviceStateFlow.value =
@@ -1058,6 +1059,7 @@ class ControllerService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        com.steamcontroller.android.hub.GamehubSync.stop()
         Diagnostics.record(TAG, "service destroyed")
         releaseWakeLock()
         reader?.stop()

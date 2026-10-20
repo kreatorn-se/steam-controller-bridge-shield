@@ -26,7 +26,7 @@ class StickPadView @JvmOverloads constructor(
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 3f
-        color = Color.parseColor("#2A475E")
+        color = Color.parseColor("#3E444D")
     }
     private val deadzonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -39,7 +39,7 @@ class StickPadView @JvmOverloads constructor(
     }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#66C0F4")
+        color = Color.parseColor("#1A9FFF")
     }
 
     fun setPosition(x: Float, y: Float) {

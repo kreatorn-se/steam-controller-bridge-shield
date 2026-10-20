@@ -59,5 +59,9 @@
         <item name="android:textColorPrimary">@color/text_high</item>
         <item name="android:textColorSecondary">@color/text_mid</item>
         <item name="android:textColorTertiary">@color/text_low</item>
+
+        <!-- Tighter, Steam-like type: Roboto Condensed across the app. -->
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="fontFamily">sans-serif-condensed</item>
     </style>
 </resources>

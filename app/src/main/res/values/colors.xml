@@ -1,29 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- ── Surfaces ─────────────────────────────────────────────────────────────
-         Near-black with a blue cast. One ramp, five steps: elevation is expressed by
-         surface colour, not shadows (a TV has no shadows worth speaking of). -->
-    <color name="window_bg">#0A0E13</color>
-    <color name="surface_1">#0E131A</color>
-    <color name="surface_2">#121821</color>
-    <color name="surface_3">#171F29</color>
-    <color name="surface_4">#1F2A36</color>
-    <color name="outline">#3A4E63</color>
-    <color name="outline_variant">#22303D</color>
+         Neutral graphite in the spirit of Steam's Big Picture, matching gamehub.kreatorn.se.
+         One ramp, five steps: elevation is surface colour, not shadows. -->
+    <color name="window_bg">#16181C</color>
+    <color name="surface_1">#1B1E23</color>
+    <color name="surface_2">#1F2228</color>
+    <color name="surface_3">#2A2E35</color>
+    <color name="surface_4">#323740</color>
+    <color name="outline">#3E444D</color>
+    <color name="outline_variant">#2A2E35</color>
 
     <!-- ── Accent ───────────────────────────────────────────────────────────────
-         Electric cyan - Steam's blue (#66C0F4) pushed brighter so it reads as a lit
-         element on near-black instead of a tint. -->
-    <color name="accent">#4FD6FF</color>
-    <color name="accent_on">#00202E</color>
-    <color name="accent_container">#0E3A4E</color>
-    <color name="accent_on_container">#B6ECFF</color>
-    <color name="accent_dim">#66C0F4</color>
+         Steam blue, used only for focus, selection and the live state. -->
+    <color name="accent">#1A9FFF</color>
+    <color name="accent_on">#04121F</color>
+    <color name="accent_container">#13314A</color>
+    <color name="accent_on_container">#BFE2FF</color>
+    <color name="accent_dim">#66B8F5</color>
 
     <!-- Text ramp. Three steps, no more: high = content, mid = labels, low = disabled. -->
-    <color name="text_high">#E8F4FF</color>
-    <color name="text_mid">#A9BECE</color>
-    <color name="text_low">#6C8093</color>
+    <color name="text_high">#E6E8EB</color>
+    <color name="text_mid">#A1A7AF</color>
+    <color name="text_low">#6B727B</color>
 
     <!-- Error state colours. Live / not-ready-yet are the status_* colours below. -->
     <color name="error_container">#3A1D22</color>
@@ -34,12 +33,12 @@
          chips and mapping badges. -->
 
     <!-- Inactive chip / secondary label text. -->
-    <color name="chip_inactive">#A9BECE</color>
+    <color name="chip_inactive">#A1A7AF</color>
 
     <!-- Big Start/Stop button. Unfocused is a dark accent wash so the focused state
          has somewhere to go - the difference is the whole point of the selector. -->
-    <color name="action_fill">#0E3A4E</color>
-    <color name="action_fill_focused">#4FD6FF</color>
+    <color name="action_fill">#13314A</color>
+    <color name="action_fill_focused">#1A9FFF</color>
 
     <color name="status_connected_container">#0F3323</color>
     <color name="status_connected_on_container">#7BEBA8</color>

@@ -14,8 +14,8 @@
         android:textColor="?attr/colorPrimary"
         android:textSize="13sp"
         android:textStyle="bold"
-        android:letterSpacing="0.12"
-        android:textAllCaps="true"
+        android:letterSpacing="0.01"
+        android:textAllCaps="false"
         tools:text="Face buttons" />
 
     <View

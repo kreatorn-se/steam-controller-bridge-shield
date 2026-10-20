@@ -145,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnCalibration.setOnClickListener { open(CalibrationActivity::class.java) }
         binding.btnMapping.setOnClickListener { open(MappingActivity::class.java) }
         binding.btnGameProfiles.setOnClickListener { open(ProfilesActivity::class.java) }
+        binding.btnGamehub.setOnClickListener { com.steamcontroller.android.hub.GamehubDialog.show(this) }
 
         setupTransportDropdown()
         setupActionCardFocusMemory()
@@ -234,6 +235,7 @@ class MainActivity : AppCompatActivity() {
                 binding.btnCalibration,
                 binding.btnMapping,
                 binding.btnGameProfiles,
+                binding.btnGamehub,
                 binding.btnDebug
             )
         // Matches the layout's default; used until a card has been visited this session.

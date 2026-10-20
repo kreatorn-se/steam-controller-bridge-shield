@@ -6,7 +6,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="10dp"
-    app:cardCornerRadius="18dp"
+    app:cardCornerRadius="@dimen/card_radius"
     app:cardElevation="0dp"
     app:strokeColor="?attr/colorOutlineVariant"
     app:strokeWidth="1dp">
@@ -51,7 +51,7 @@
                     android:textColor="@color/status_connected_on_container"
                     android:textSize="10sp"
                     android:textStyle="bold"
-                    android:letterSpacing="0.1"
+                    android:letterSpacing="0.01"
                     android:visibility="gone" />
             </LinearLayout>
 
@@ -84,7 +84,7 @@
             android:minWidth="72dp"
             android:text="@string/profiles_load"
             android:textSize="13sp"
-            app:cornerRadius="14dp" />
+            app:cornerRadius="@dimen/pill_radius" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnProfileMenu"

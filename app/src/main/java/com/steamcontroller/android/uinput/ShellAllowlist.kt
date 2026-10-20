@@ -1,10 +1,13 @@
 package com.steamcontroller.android.uinput
 
+import com.steamcontroller.android.BuildConfig
+
 /**
  * The only commands [UInputService] will run as the shell uid. The service holds shell
  * privileges, so it exposes exactly what the app uses instead of a general escape hatch:
  *
  * - `mkdir -p` / `screencap -p` inside the screenshots directory (SystemActions)
+ * - `screencap -p` into the app's own Gamehub upload queue (Android/data/<app>/files/captures)
  * - `settings get|put|delete secure show_ime_with_hard_keyboard` (UInputGamepad)
  *
  * Adding a system action means adding its exact shape here.
@@ -17,6 +20,12 @@ internal object ShellAllowlist {
     private const val IME_SETTING = "show_ime_with_hard_keyboard"
 
     private val SCREENSHOT_FILE = Regex("""[A-Za-z0-9_\-]+\.png""")
+
+    // The app's external files dir as the shell user sees it; both spellings resolve to it.
+    private val CAPTURE_DIRS = listOf(
+        "/storage/emulated/0/Android/data/${BuildConfig.APPLICATION_ID}/files/captures",
+        "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/captures",
+    )
     private val INT_VALUE = Regex("""-?\d{1,10}""")
 
     fun isAllowed(cmd: Array<String>): Boolean {
@@ -44,8 +53,9 @@ internal object ShellAllowlist {
         }
     }
 
-    private fun isScreenshotPath(path: String): Boolean {
-        val prefix = "$SCREENSHOT_DIR/"
-        return path.startsWith(prefix) && SCREENSHOT_FILE.matches(path.removePrefix(prefix))
-    }
+    private fun isScreenshotPath(path: String): Boolean =
+        (CAPTURE_DIRS + SCREENSHOT_DIR).any { dir ->
+            val prefix = "$dir/"
+            path.startsWith(prefix) && SCREENSHOT_FILE.matches(path.removePrefix(prefix))
+        }
 }

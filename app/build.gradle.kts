@@ -36,8 +36,8 @@ android {
         applicationId = "io.github.lluppi.steamcontrollerbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0-gfn"
+        versionCode = 3
+        versionName = "1.2.0-gamehub"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -125,4 +125,6 @@ dependencies {
     implementation(libs.shizuku.provider)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // Talks ADB to the Shield itself to start Shizuku after a reboot (ShizukuAdbStarter).
+    implementation("dev.mobile:dadb:1.2.9")
 }

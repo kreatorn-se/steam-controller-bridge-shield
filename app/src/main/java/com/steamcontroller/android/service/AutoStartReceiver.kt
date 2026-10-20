@@ -1,5 +1,6 @@
 package com.steamcontroller.android.service
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -17,6 +18,8 @@ import com.steamcontroller.android.Prefs
 import com.steamcontroller.android.R
 import com.steamcontroller.android.Transport
 import com.steamcontroller.android.bt.BluetoothHidManager
+import com.steamcontroller.android.hub.GamehubStore
+import com.steamcontroller.android.shizuku.ShizukuAdbStarter
 import rikka.shizuku.Shizuku
 
 /** Starts the controller service at boot or when the configured Bluetooth controller connects. */
@@ -27,6 +30,14 @@ class AutoStartReceiver : BroadcastReceiver() {
         private const val ADVISORY_NOTIFICATION_ID = 2
         private const val ADVISORY_COOLDOWN_MS = 60_000L
 
+        // Shizuku auto-start after boot: one attempt now, then retries while Wi-Fi and adbd
+        // come up. Each attempt runs inside goAsync() well under the broadcast time limit.
+        const val ACTION_RETRY_SHIZUKU = "com.steamcontroller.android.action.RETRY_SHIZUKU"
+        private const val EXTRA_ATTEMPT = "attempt"
+        private const val MAX_ATTEMPTS = 6
+        private const val RETRY_DELAY_MS = 30_000L
+        private const val SHIZUKU_READY_WAIT_MS = 10_000L
+
         @Volatile private var lastAdvisoryAt = 0L
     }
 
@@ -34,12 +45,53 @@ class AutoStartReceiver : BroadcastReceiver() {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED -> onBoot(context)
             BluetoothDevice.ACTION_ACL_CONNECTED -> onControllerConnected(context, intent)
+            ACTION_RETRY_SHIZUKU -> startShizukuThenService(context, intent.getIntExtra(EXTRA_ATTEMPT, 1))
         }
     }
 
     private fun onBoot(context: Context) {
         Prefs.setUserStoppedService(context, false)
-        if (Prefs.getStartOnBoot(context)) start(context, "boot")
+        if (!Prefs.getStartOnBoot(context)) return
+        if (isShizukuReady() || !GamehubStore.autoStartShizuku(context)) {
+            start(context, "boot")
+        } else {
+            startShizukuThenService(context, 1)
+        }
+    }
+
+    /** Starts Shizuku over the Shield's own ADB port, then the controller service. */
+    private fun startShizukuThenService(context: Context, attempt: Int) {
+        if (ControllerService.isRunning || Prefs.getUserStoppedService(context)) return
+        val pending = goAsync()
+        Thread({
+            try {
+                if (!isShizukuReady()) {
+                    val r = ShizukuAdbStarter.startShizuku(context, timeoutMs = 15_000)
+                    Log.i(TAG, "Shizuku start attempt $attempt: ${r.ok} ${r.message}")
+                    val deadline = SystemClock.elapsedRealtime() + SHIZUKU_READY_WAIT_MS
+                    while (!isShizukuReady() && SystemClock.elapsedRealtime() < deadline) Thread.sleep(500)
+                }
+                when {
+                    isShizukuReady() -> start(context, "boot (Shizuku started by the app)")
+                    attempt < MAX_ATTEMPTS -> scheduleRetry(context, attempt + 1)
+                    else -> postShizukuAdvisory(context)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Shizuku auto-start failed: ${t.message}")
+                if (attempt < MAX_ATTEMPTS) scheduleRetry(context, attempt + 1)
+            } finally {
+                pending.finish()
+            }
+        }, "shizuku-boot").start()
+    }
+
+    private fun scheduleRetry(context: Context, attempt: Int) {
+        val intent = Intent(context, AutoStartReceiver::class.java)
+            .setAction(ACTION_RETRY_SHIZUKU).putExtra(EXTRA_ATTEMPT, attempt)
+        val pi = PendingIntent.getBroadcast(context, 7, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val am = context.getSystemService(AlarmManager::class.java) ?: return
+        am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + RETRY_DELAY_MS, pi)
+        Log.i(TAG, "Shizuku not ready; retry $attempt in ${RETRY_DELAY_MS / 1000}s")
     }
 
     private fun onControllerConnected(context: Context, intent: Intent) {

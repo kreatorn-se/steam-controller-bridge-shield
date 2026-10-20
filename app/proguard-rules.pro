@@ -5,3 +5,9 @@
 # stub/proxy must match on both sides, and cpp/uinput_jni.cpp binds to UInputNative's
 # method names. Only third-party code is shrunk.
 -keep class com.steamcontroller.android.** { *; }
+
+# dadb (ADB client used to start Shizuku after boot): keep it whole, it is small and parses
+# key material by reflection-free but name-sensitive code paths we have not audited for R8.
+-keep class dadb.** { *; }
+-dontwarn dadb.**
+-dontwarn okio.**

@@ -1,15 +1,16 @@
 package com.steamcontroller.android.input
 
 import android.content.Context
-import android.media.MediaScannerConnection
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import com.steamcontroller.android.hub.CaptureStore
+import com.steamcontroller.android.hub.GamehubStore
+import com.steamcontroller.android.hub.GamehubSync
+import com.steamcontroller.android.service.UsageStatsHelper
 import com.steamcontroller.android.uinput.ShellAllowlist
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.io.File
 
 /**
  * Non-gamepad actions triggered by mapped Steam Controller buttons.
@@ -21,40 +22,68 @@ object SystemActions {
     private const val TAG = "SystemActions"
 
     /**
-     * Takes a screenshot via `screencap`, saves it under Pictures/Screenshots/,
-     * notifies MediaScanner so it appears in the gallery, and toasts the user.
-     * Runs the shell command on a background thread so the input pipeline isn't blocked.
+     * Captures the screen with `screencap` straight into the Gamehub upload queue
+     * (Android/data/<app>/files/captures) and asks the sync loop to upload it.
      *
-     * @param runShell function that executes a shell command via the Shizuku user service
-     *                 and returns the exit code (or -1 on failure).
+     * If the shell user cannot write there, falls back to Pictures/Screenshots and copies the
+     * file into the queue from there (needs the storage read permission the installer grants).
      */
     fun takeScreenshot(context: Context, runShell: (Array<String>) -> Int) {
         Thread({
             try {
-                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                val dir = ShellAllowlist.SCREENSHOT_DIR
-                val path = "$dir/SteamCtrl_$timestamp.png"
+                val capturedAt = System.currentTimeMillis()
+                val id = CaptureStore.newId(capturedAt)
+                val queueDir = CaptureStore.dir(context)
+                val fg = try { UsageStatsHelper.getCurrentForegroundApp(context) } catch (_: Throwable) { null }
 
-                runShell(arrayOf("mkdir", "-p", dir))
-                val exit = runShell(arrayOf("screencap", "-p", path))
-
-                if (exit == 0) {
-                    Log.i(TAG, "Screenshot saved: $path")
-                    MediaScannerConnection.scanFile(
-                        context, arrayOf(path), arrayOf("image/png"), null
-                    )
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "Screenshot saved", Toast.LENGTH_SHORT).show()
+                var ok = false
+                if (queueDir != null) {
+                    val target = File(queueDir, "$id.png")
+                    val exit = runShell(arrayOf("screencap", "-p", target.path))
+                    ok = exit == 0 && target.length() > 0
+                    if (!ok) {
+                        Log.w(TAG, "screencap into queue failed (exit $exit); trying Pictures fallback")
+                        target.delete()
                     }
+                }
+                if (!ok) {
+                    val dir = ShellAllowlist.SCREENSHOT_DIR
+                    val path = "$dir/$id.png"
+                    runShell(arrayOf("mkdir", "-p", dir))
+                    val exit = runShell(arrayOf("screencap", "-p", path))
+                    if (exit == 0 && queueDir != null) {
+                        ok = try {
+                            File(path).copyTo(File(queueDir, "$id.png"), overwrite = true)
+                            true
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "copy from Pictures failed: ${t.message}")
+                            false
+                        }
+                    } else if (exit == 0) {
+                        // Saved locally even though there is no queue directory.
+                        say(context, "Screenshot saved to Pictures")
+                        return@Thread
+                    }
+                }
+
+                if (!ok) {
+                    say(context, "Screenshot failed")
+                    return@Thread
+                }
+                CaptureStore.writeMeta(context, id, capturedAt, fg)
+                if (GamehubStore.isLinked(context)) {
+                    say(context, "Captured · uploading to Gamehub")
+                    GamehubSync.kick(context)
                 } else {
-                    Log.e(TAG, "screencap failed, exit=$exit")
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "Screenshot failed (exit $exit)", Toast.LENGTH_SHORT).show()
-                    }
+                    say(context, "Captured · link Gamehub to upload")
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "Screenshot threw: ${t.message}")
             }
         }, "screencap").apply { isDaemon = true; start() }
+    }
+
+    private fun say(context: Context, msg: String) {
+        Handler(Looper.getMainLooper()).post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
     }
 }

@@ -354,6 +354,29 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/btnGamehub"
+                style="@style/ActionCard"
+                android:layout_marginEnd="@dimen/action_grid_gap"
+                android:nextFocusUp="@id/btnToggleService">
+
+                <LinearLayout style="@style/ActionCard.Row">
+
+                    <com.google.android.material.card.MaterialCardView
+                        style="@style/ActionCard.Badge">
+
+                        <ImageView
+                            style="@style/ActionCard.Glyph"
+                            android:src="@drawable/ic_gamehub"
+                            tools:ignore="ContentDescription" />
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <TextView
+                        style="@style/ActionCard.Label"
+                        android:text="@string/main_action_gamehub_title" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
                 android:id="@+id/btnDebug"
                 style="@style/ActionCard"
                 android:nextFocusUp="@id/btnToggleService">

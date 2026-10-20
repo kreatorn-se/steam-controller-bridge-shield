@@ -194,8 +194,10 @@ class CalibrationActivity : AppCompatActivity() {
                 val (lx, ly) = leftCal.apply(lastLeftRawX, lastLeftRawY)
                 val (rx, ry) = rightCal.apply(lastRightRawX, lastRightRawY)
 
-                binding.padLeft.setPosition(lx / 32767f, ly / 32767f)
-                binding.padRight.setPosition(rx / 32767f, ry / 32767f)
+                // The controller reports up as +Y; the preview draws +Y downward, so flip it here.
+                // Display only: what games receive is unchanged (that is what "Invert Y" is for).
+                binding.padLeft.setPosition(lx / 32767f, -ly / 32767f)
+                binding.padRight.setPosition(rx / 32767f, -ry / 32767f)
 
                 binding.tvLeftRaw.text = "raw: %5d, %5d".format(lastLeftRawX, lastLeftRawY)
                 binding.tvRightRaw.text = "raw: %5d, %5d".format(lastRightRawX, lastRightRawY)

@@ -34,7 +34,7 @@
          pad produced, so the disc shrinks and the glyph does not. -->
     <dimen name="action_pad">8dp</dimen>
     <dimen name="action_badge_size">32dp</dimen>
-    <dimen name="action_badge_radius">16dp</dimen>
+    <dimen name="action_badge_radius">4dp</dimen>
     <dimen name="action_label_size">15sp</dimen>
     <!-- Pins the four icons into one column. 48dp leaves 183dp used of a ~210dp card for the
          widest label (Button mapping), so nothing collides and the average group reads centred. -->

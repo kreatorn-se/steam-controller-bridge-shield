@@ -162,4 +162,7 @@
     <string name="menu_save">Save</string>
     <string name="menu_export_backup">Export backup…</string>
     <string name="menu_import_backup">Import backup…</string>
+
+    <!-- ━━━━━━━━━━━━ Gamehub ━━━━━━━━━━━━ -->
+    <string name="main_action_gamehub_title">Gamehub</string>
 </resources>

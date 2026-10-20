@@ -10,6 +10,11 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Gamehub uploads and config sync; ADB to the Shield itself on 127.0.0.1:5555. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Fallback screenshot path: copy from Pictures/Screenshots into the upload queue. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
