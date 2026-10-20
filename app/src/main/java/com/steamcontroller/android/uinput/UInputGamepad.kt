@@ -142,6 +142,7 @@ class UInputGamepad(
     @Volatile private var cachedMapping: Map<SteamButton, XboxTarget> = emptyMap()
 
     @Volatile private var cachedDesktopMapping: Map<SteamButton, XboxTarget> = emptyMap()
+    @Volatile private var cachedActionLayer: Map<SteamButton, XboxTarget> = DEFAULT_ACTION_LAYER
 
     @Volatile private var lastCalRefresh: Long = 0
     private val calRefreshIntervalMs = 250L // ~4 Hz refresh, plenty for live tuning
@@ -486,6 +487,7 @@ class UInputGamepad(
         cachedRightCal = Prefs.getRightCalibration(context)
         cachedMapping = Prefs.getAllMappings(context)
         cachedDesktopMapping = Prefs.getAllDesktopMappings(context)
+        cachedActionLayer = Prefs.getAllActionLayerMappings(context)
         cachedMouseSensitivity = Prefs.getMouseSensitivity(context)
         cachedTrackpadAsMouse = Prefs.getTrackpadAsMouseInGamepad(context)
         cachedGyroEnabled = Prefs.getGyroEnabled(context)
@@ -636,7 +638,8 @@ class UInputGamepad(
 
         for ((source, baseTarget) in cachedMapping) {
             if (baseTarget == XboxTarget.GUIDE_LAYER || baseTarget == XboxTarget.GFN_LAYER) continue
-            val target = if (layerActive) DEFAULT_ACTION_LAYER[source] ?: baseTarget else baseTarget
+            val layerTarget = if (layerActive) cachedActionLayer[source] else null
+            val target = if (layerTarget != null && layerTarget != XboxTarget.NONE) layerTarget else baseTarget
             val sourceBit = 1L shl source.ordinal
             val pressed = sourceButtons and sourceBit != 0L
             when {

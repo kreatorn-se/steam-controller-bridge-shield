@@ -33,6 +33,8 @@ data class NamedProfile(
     /** Serialised as `SteamButton.name` to stable `XboxTarget.name` values. */
     val mapping: Map<String, String>,
     val desktopMapping: Map<String, String> = emptyMap(),
+    /** Held-layer mapping; empty in profiles saved before 1.3.0 (then the current layer stays). */
+    val actionLayer: Map<String, String> = emptyMap(),
     val gyroEnabled: Boolean = false,
     val gyroActivation: Int = GyroActivation.RIGHT_PAD_TOUCH.id,
     val gyroSensitivityX: Float = 1f,
@@ -72,6 +74,7 @@ data class NamedProfile(
         put(KEY_RI, rumbleIntensity)
         put(KEY_MAPPING, JSONObject(mapping as Map<*, *>))
         put(KEY_DESKTOP_MAPPING, JSONObject(desktopMapping as Map<*, *>))
+        put(KEY_ACTION_LAYER, JSONObject(actionLayer as Map<*, *>))
         put(KEY_GYRO_ENABLED, gyroEnabled)
         put(KEY_GYRO_ACTIVATION, gyroActivation)
         put(KEY_GYRO_SENS_X, gyroSensitivityX.toDouble())
@@ -108,6 +111,7 @@ data class NamedProfile(
         private const val KEY_RI = "rumbleIntensity"
         private const val KEY_MAPPING = "mapping"
         private const val KEY_DESKTOP_MAPPING = "desktopMapping"
+        private const val KEY_ACTION_LAYER = "actionLayer"
         private const val KEY_GYRO_ENABLED = "gyroEnabled"
         private const val KEY_GYRO_ACTIVATION = "gyroActivation"
         private const val KEY_GYRO_SENS_X = "gyroSensitivityX"
@@ -141,6 +145,7 @@ data class NamedProfile(
         fun fromJson(obj: JSONObject): NamedProfile {
             val mapping = parseMapping(obj.optJSONObject(KEY_MAPPING))
             val desktopMapping = parseMapping(obj.optJSONObject(KEY_DESKTOP_MAPPING))
+            val actionLayer = parseMapping(obj.optJSONObject(KEY_ACTION_LAYER))
 
             val boundArr = obj.optJSONArray(KEY_BOUND)
             val bound = if (boundArr !=
@@ -169,6 +174,7 @@ data class NamedProfile(
                 rumbleIntensity = obj.optInt(KEY_RI, 100),
                 mapping = mapping,
                 desktopMapping = desktopMapping,
+                actionLayer = actionLayer,
                 gyroEnabled = obj.optBoolean(KEY_GYRO_ENABLED, false),
                 gyroActivation =
                     obj.optInt(KEY_GYRO_ACTIVATION, GyroActivation.RIGHT_PAD_TOUCH.id),

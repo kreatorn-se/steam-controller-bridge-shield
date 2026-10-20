@@ -229,7 +229,7 @@ class ControllerPage(host: Host) : Page(host) {
             ctx.getString(R.string.ctl_sheet_eyebrow, layer.title),
             Names.sourceTitle(id),
             when {
-                !editable -> Mappings.layerKey(ctx)?.let { ctx.getString(R.string.ctl_sheet_action_fixed, Names.source(it.name)) }
+                layer == Layer.ACTION -> Mappings.layerKey(ctx)?.let { ctx.getString(R.string.ctl_sheet_action_fixed, Names.source(it.name)) }
                     ?: ctx.getString(R.string.ctl_hint_layer_none)
                 else -> ctx.getString(R.string.ctl_sheet_live)
             },
@@ -250,7 +250,8 @@ class ControllerPage(host: Host) : Page(host) {
                         t == def -> ctx.getString(R.string.ctl_default)
                         else -> null
                     }
-                    val row = ListRow(ctx, Names.full(t), Names.hint(t), tag = tag, tagColor = if (isCur) C.accent else C.text3, current = isCur) { pick(button, t) }
+                    val label = if (layer == Layer.ACTION && t == XboxTarget.NONE) ctx.getString(R.string.ctl_action_passthrough) else Names.full(t)
+                    val row = ListRow(ctx, label, Names.hint(t), tag = tag, tagColor = if (isCur) C.accent else C.text3, current = isCur) { pick(button, t) }
                     if (isCur) focusRow = row
                     sheet.body.addView(row)
                 }

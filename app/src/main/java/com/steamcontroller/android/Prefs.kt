@@ -2,6 +2,7 @@ package com.steamcontroller.android
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.steamcontroller.android.input.DEFAULT_ACTION_LAYER
 import com.steamcontroller.android.input.DEFAULT_DESKTOP_MAPPING
 import com.steamcontroller.android.input.DEFAULT_MAPPING
 import com.steamcontroller.android.input.GyroActivation
@@ -407,6 +408,7 @@ object Prefs {
     // Gamepad and desktop mappings are the same table under different key prefixes.
     private const val MAP_PREFIX = "map_"
     private const val DESKTOP_MAP_PREFIX = "desktop_map_"
+    private const val ACTION_MAP_PREFIX = "action_map_"
 
     private fun mapKey(prefix: String, source: SteamButton) = "$prefix${source.name}"
 
@@ -477,6 +479,24 @@ object Prefs {
 
     fun resetDesktopMappings(context: Context) = clearMappings(context, DESKTOP_MAP_PREFIX)
 
+    // Action layer: what each button does while the layer button (GUIDE_LAYER / GFN_LAYER) is held.
+    // NONE means "falls through to the normal mapping".
+    fun getActionLayerMapping(
+        context: Context,
+        source: SteamButton,
+    ): XboxTarget = readMapping(context, ACTION_MAP_PREFIX, DEFAULT_ACTION_LAYER, source)
+
+    fun setActionLayerMapping(
+        context: Context,
+        source: SteamButton,
+        target: XboxTarget,
+    ) = writeMapping(context, ACTION_MAP_PREFIX, source, target)
+
+    fun getAllActionLayerMappings(context: Context): Map<SteamButton, XboxTarget> =
+        SteamButton.values().associateWith { getActionLayerMapping(context, it) }
+
+    fun resetActionLayerMappings(context: Context) = clearMappings(context, ACTION_MAP_PREFIX)
+
     // ─── Named profiles ──────────────────────────────────────────────────────
     // Profiles are stored as a single JSON array under KEY_NAMED_PROFILES.
     // Loading a profile overwrites every "live" preference key it captures.
@@ -537,6 +557,10 @@ object Prefs {
             SteamButton.values().associate {
                 it.name to getMapping(context, it).name
             }
+        val actionLayerMap =
+            SteamButton.values().associate {
+                it.name to getActionLayerMapping(context, it).name
+            }
         val desktopMappingMap =
             SteamButton.values().associate {
                 it.name to getDesktopMapping(context, it).name
@@ -568,6 +592,7 @@ object Prefs {
             rumbleIntensity = getRumbleIntensity(context),
             mapping = mappingMap,
             desktopMapping = desktopMappingMap,
+            actionLayer = actionLayerMap,
             gyroEnabled = getGyroEnabled(context),
             gyroActivation = getGyroActivation(context).id,
             gyroSensitivityX = gyro.sensitivityX,
@@ -633,6 +658,9 @@ object Prefs {
         SteamButton.values().forEach { btn ->
             profile.mapping[btn.name]?.let { stored ->
                 setMapping(context, btn, XboxTarget.fromPersisted(stored) ?: XboxTarget.NONE)
+            }
+            profile.actionLayer[btn.name]?.let { stored ->
+                setActionLayerMapping(context, btn, XboxTarget.fromPersisted(stored) ?: XboxTarget.NONE)
             }
             profile.desktopMapping[btn.name]?.let { stored ->
                 setDesktopMapping(

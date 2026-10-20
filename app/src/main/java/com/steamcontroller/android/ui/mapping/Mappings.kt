@@ -17,25 +17,22 @@ enum class Layer(val title: String) {
 
 /**
  * One place that reads and writes a mapping for a layer, so the UI never branches on the layer.
- *
- * The action layer is read-only for now: the runtime applies [DEFAULT_ACTION_LAYER] directly and
- * there is no stored table yet. When Prefs gains getActionLayerMapping/setActionLayerMapping, only
- * [get], [set], [reset] and [editable] change here.
+ * In the action layer NONE means "falls through to the gamepad mapping".
  */
 object Mappings {
-    fun editable(layer: Layer) = layer != Layer.ACTION
+    fun editable(layer: Layer) = true
 
     fun get(ctx: Context, layer: Layer, b: SteamButton): XboxTarget = when (layer) {
         Layer.GAMEPAD -> Prefs.getMapping(ctx, b)
         Layer.DESKTOP -> Prefs.getDesktopMapping(ctx, b)
-        Layer.ACTION -> DEFAULT_ACTION_LAYER[b] ?: XboxTarget.NONE
+        Layer.ACTION -> Prefs.getActionLayerMapping(ctx, b)
     }
 
     fun set(ctx: Context, layer: Layer, b: SteamButton, t: XboxTarget) {
         when (layer) {
             Layer.GAMEPAD -> Prefs.setMapping(ctx, b, t)
             Layer.DESKTOP -> Prefs.setDesktopMapping(ctx, b, t)
-            Layer.ACTION -> Unit
+            Layer.ACTION -> Prefs.setActionLayerMapping(ctx, b, t)
         }
     }
 
@@ -49,7 +46,7 @@ object Mappings {
         when (layer) {
             Layer.GAMEPAD -> Prefs.resetMappings(ctx)
             Layer.DESKTOP -> Prefs.resetDesktopMappings(ctx)
-            Layer.ACTION -> Unit
+            Layer.ACTION -> Prefs.resetActionLayerMappings(ctx)
         }
     }
 

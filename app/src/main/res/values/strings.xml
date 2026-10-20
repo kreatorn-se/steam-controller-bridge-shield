@@ -58,7 +58,8 @@
     <string name="ctl_hint_layer_none">Map a button to “layer on hold” to use the action layer</string>
     <string name="ctl_sheet_eyebrow">Remap · %1$s</string>
     <string name="ctl_sheet_live">Applies immediately</string>
-    <string name="ctl_sheet_action_fixed">Active while %1$s is held. The action layer is fixed in this version.</string>
+    <string name="ctl_sheet_action_fixed">Active while %1$s is held. Applies immediately.</string>
+    <string name="ctl_action_passthrough">Same as gamepad mapping</string>
     <string name="ctl_sheet_info_eyebrow">Fixed control</string>
     <string name="ctl_current">Current</string>
     <string name="ctl_default">Default</string>

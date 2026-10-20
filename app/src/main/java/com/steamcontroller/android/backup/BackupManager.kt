@@ -73,6 +73,14 @@ object BackupManager {
                     }
                 }
             )
+            put(
+                "actionLayer",
+                JSONObject().apply {
+                    Prefs.getAllActionLayerMappings(context).forEach { (btn, target) ->
+                        put(btn.name, target.name)
+                    }
+                }
+            )
         }
 
         val profiles = JSONArray().apply {
@@ -187,6 +195,11 @@ object BackupManager {
             live.optJSONObject("desktopMapping")?.let { mapObj ->
                 importMapping(mapObj) { button, target ->
                     Prefs.setDesktopMapping(context, button, target)
+                }
+            }
+            live.optJSONObject("actionLayer")?.let { mapObj ->
+                importMapping(mapObj) { button, target ->
+                    Prefs.setActionLayerMapping(context, button, target)
                 }
             }
         }
