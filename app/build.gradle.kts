@@ -139,5 +139,6 @@ dependencies {
         exclude(group = "org.opentest4j")
         exclude(group = "org.apiguardian")
         exclude(group = "junit")
+        exclude(group = "org.graalvm.buildtools")
     }
 }

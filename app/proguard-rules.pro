@@ -11,3 +11,6 @@
 -keep class dadb.** { *; }
 -dontwarn dadb.**
 -dontwarn okio.**
+# Test-only classes some of dadb's transitive artifacts reference.
+-dontwarn org.junit.**
+-dontwarn org.graalvm.**
