@@ -1,46 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Steam Controller Bridge</string>
+
+    <!-- ━━━━━━━━━━━━ Service, notification, auto-start (runtime) ━━━━━━━━━━━━ -->
     <string name="status_disconnected">Disconnected</string>
     <string name="status_ready">Ready</string>
     <string name="status_link_lost">Link lost - %1$s</string>
     <string name="reconnecting">Reconnecting…</string>
     <string name="shizuku_not_running">Shizuku is not running. Please start Shizuku first.</string>
-    <string name="shizuku_permission_denied">Shizuku permission denied.</string>
-    <string name="btn_start">Start Service</string>
-    <string name="btn_stop">Stop Service</string>
-    <string name="btn_debug">Debug HID</string>
-
-    <string name="help_dialog_title">Switching connection modes</string>
+    <string name="shizuku_permission_denied">Shizuku permission denied</string>
     <string name="notification_channel_name">Controller Service</string>
     <string name="notification_title">Steam Controller Bridge</string>
     <string name="notif_mode_uinput">Emulating %1$s</string>
     <string name="notif_mode_inject">Fallback: Shizuku inject (limited)</string>
     <string name="notif_starting">Connecting…</string>
-
-    <!-- ━━━━━━━━━━━━ MainActivity ━━━━━━━━━━━━ -->
-    <string name="main_title">Steam Controller Bridge</string>
-    <string name="main_subtitle">for Android via Shizuku</string>
-    <string name="main_open_github_desc">Open GitHub repository</string>
-    <string name="main_help_desc">Help: switching connection modes</string>
-    <string name="main_shizuku_checking">Shizuku: checking…</string>
-    <string name="main_transport_usb">USB / Puck</string>
-    <string name="main_transport_bt">Bluetooth</string>
-    <string name="main_controller_disconnected">Disconnected</string>
-    <string name="main_sc2026_illustration_desc">Steam Controller 2026 illustration</string>
-    <string name="main_control_mode_label">Control Mode</string>
-    <string name="main_mode_gamepad">Gamepad</string>
-    <string name="main_mode_desktop">Desktop</string>
-    <string name="main_bt_device_hint">Bluetooth device</string>
-    <string name="main_refresh_bt_desc">Refresh paired devices</string>
-    <string name="main_action_calibration_title">Calibration</string>
-    <string name="main_action_mapping_title">Mapping</string>
-    <string name="main_action_profiles_title">Profiles</string>
-    <string name="main_connection_label">CONNECTION</string>
+    <string name="autostart_channel_name">Controller auto-start</string>
+    <string name="autostart_shizuku_advisory_title">Controller auto-start needs Shizuku</string>
+    <string name="autostart_shizuku_advisory_text">Start Shizuku, then open Steam Controller Bridge to restore controller input.</string>
 
     <!-- ━━━━━━━━━━━━ Shizuku TV startup ━━━━━━━━━━━━ -->
-    <string name="main_shizuku_open_failed">Could not open Shizuku.</string>
-    <string name="main_shizuku_store_failed">Could not open a store. Install Shizuku manually from GitHub.</string>
+    <string name="main_shizuku_open_failed">Could not open Shizuku</string>
+    <string name="main_shizuku_store_failed">Could not open a store. Install Shizuku from GitHub.</string>
     <string name="shizuku_starter_service_label">Steam Controller Bridge - Shizuku starter</string>
     <string name="shizuku_starter_service_summary">Presses Shizuku\'s Start button so a TV remote is enough.</string>
     <string name="shizuku_starter_service_description">Shizuku\'s Start button cannot receive D-pad focus on Android TV. This helper sees only Shizuku and acts only briefly after you request it.</string>
@@ -48,25 +28,102 @@
     <string name="shizuku_starter_prompt_message">Shizuku\'s Start button cannot be selected with a TV remote. Enable “Steam Controller Bridge - Shizuku starter” under Accessibility and this app will press it for you. It is restricted to Shizuku and only acts after you ask it to.</string>
     <string name="shizuku_starter_prompt_open_settings">Open Accessibility settings</string>
     <string name="shizuku_starter_prompt_open_shizuku">Just open Shizuku</string>
-    <string name="shizuku_starter_armed">Opening Shizuku and pressing Start…</string>
-    <string name="shizuku_starter_settings_failed">Could not open Accessibility settings.</string>
-    <string name="shizuku_starter_settings_path">Go to Device Preferences → Accessibility → Steam Controller Bridge - Shizuku starter</string>
-    <string name="autostart_channel_name">Controller auto-start</string>
-    <string name="autostart_shizuku_advisory_title">Controller auto-start needs Shizuku</string>
-    <string name="autostart_shizuku_advisory_text">Start Shizuku, then open Steam Controller Bridge to restore controller input.</string>
+    <string name="shizuku_starter_armed">Opening Shizuku and pressing Start</string>
+    <string name="shizuku_starter_settings_failed">Could not open Accessibility settings</string>
+    <string name="shizuku_starter_settings_path">Device Preferences → Accessibility → Shizuku starter</string>
 
-    <!-- ━━━━━━━━━━━━ CalibrationActivity ━━━━━━━━━━━━ -->
+    <!-- ━━━━━━━━━━━━ Shell ━━━━━━━━━━━━ -->
+    <string name="nav_gamehub">Gamehub</string>
+    <string name="strip_no_profile">No profile</string>
+    <string name="strip_charging">Charging</string>
+    <string name="strip_start_service">Start service</string>
+    <string name="strip_stop_service">Stop service</string>
+    <string name="screen_back">Back</string>
+
+    <!-- ━━━━━━━━━━━━ Controller page ━━━━━━━━━━━━ -->
+    <string name="ctl_front">Front</string>
+    <string name="ctl_back">Back</string>
+    <string name="ctl_identify">Press any button</string>
+    <string name="ctl_identify_title">Press any button on the controller</string>
+    <string name="ctl_identify_count">Cancels in %1$d s · Back to stop</string>
+    <string name="ctl_identify_no_controller">Connect the controller first</string>
+    <string name="ctl_reset">Reset</string>
+    <string name="ctl_reset_title">Reset %1$s mappings?</string>
+    <string name="ctl_reset_body">Every control on this layer goes back to its default. Other layers and your profiles are not touched.</string>
+    <string name="ctl_reset_done">Mappings reset</string>
+    <string name="ctl_keys">A  Edit      B  Back</string>
+    <string name="ctl_hint">Select a callout, or press a button on the controller to jump to it</string>
+    <string name="ctl_hint_inactive">%1$s mappings apply when the bridge emulates that mode · change it on Device</string>
+    <string name="ctl_hint_layer">Hold %1$s for the action layer · it remaps the back paddles while held</string>
+    <string name="ctl_hint_layer_none">Map a button to “layer on hold” to use the action layer</string>
+    <string name="ctl_sheet_eyebrow">Remap · %1$s</string>
+    <string name="ctl_sheet_live">Applies immediately</string>
+    <string name="ctl_sheet_action_fixed">Active while %1$s is held. The action layer is fixed in this version.</string>
+    <string name="ctl_sheet_info_eyebrow">Fixed control</string>
+    <string name="ctl_current">Current</string>
+    <string name="ctl_default">Default</string>
+    <string name="ctl_restore_default">Restore default · %1$s</string>
+    <string name="ctl_info_dpad">The D-pad is always the D-pad in gamepad mode and the arrow keys in desktop mode, so it can move focus anywhere on the TV.</string>
+    <string name="ctl_info_lpad">The left trackpad scrolls, and its click is a right click. Speed and acceleration are on the Tuning page; you can switch the trackpads off for gamepad mode there.</string>
+    <string name="ctl_info_rpad">The right trackpad moves the pointer, and its click is a left click. It can also wake gyro aiming. Speed and acceleration are on the Tuning page.</string>
+    <string name="ctl_open_trackpad_tuning">Trackpad tuning</string>
+    <string name="ctl_open_tester">Open the input tester</string>
+
+    <!-- ━━━━━━━━━━━━ Test page ━━━━━━━━━━━━ -->
+    <string name="test_live">Live</string>
+    <string name="test_left_stick">Left stick</string>
+    <string name="test_right_stick">Right stick</string>
+    <string name="test_gyro">Gyro</string>
+    <string name="test_hold_b">Hold B to leave · output to games is paused here</string>
+    <string name="test_recenter">Y  Recenter</string>
+    <string name="test_empty">No controller. Start the service, or wake the controller with the Steam button.</string>
+
+    <!-- ━━━━━━━━━━━━ Tuning page ━━━━━━━━━━━━ -->
+    <string name="tune_left">Left stick</string>
+    <string name="tune_right">Right stick</string>
+    <string name="tune_pads">Trackpads</string>
+    <string name="tune_gyro">Gyro</string>
+    <string name="tune_live">Live</string>
+    <string name="tune_response">Response</string>
+    <string name="tune_pointer">Pointer acceleration</string>
+    <string name="tune_gyro_preview">Orientation · response</string>
+    <string name="tune_presets">Presets</string>
+    <string name="tune_inner">Inner deadzone</string>
+    <string name="tune_inner_hint">Travel ignored around the centre</string>
+    <string name="tune_outer">Outer deadzone</string>
+    <string name="tune_outer_hint">Deflection that already counts as full</string>
+    <string name="tune_curve">Response curve</string>
+    <string name="tune_curve_hint">Above 1: finer near the centre · below 1: quicker</string>
+    <string name="tune_invert_y">Invert Y</string>
+    <string name="tune_invert_y_hint">Up and down swapped for games</string>
+    <string name="tune_calibrate">Calibrate centre</string>
+    <string name="tune_calibrate_hint">Set where the sticks rest, and the gyro bias</string>
+    <string name="tune_pad_speed">Pointer speed</string>
+    <string name="tune_pad_speed_hint">Trackpad cursor sensitivity</string>
+    <string name="tune_pad_accel">Acceleration</string>
+    <string name="tune_pad_accel_hint">Slow strokes finer, fast strokes unchanged</string>
+    <string name="tune_gyro_enable_hint">Tilting the controller nudges the right stick</string>
+    <string name="tune_gyro_activation_hint">What switches gyro aiming on</string>
+    <string name="tune_gyro_deadzone_hint">Rad/s of hand tremor that is ignored</string>
+    <string name="tune_gyro_response_hint">Above 1: small motions finer</string>
+    <string name="tune_gyro_bias_hint">Put the controller down on a flat surface first</string>
+    <string name="tune_needs_controller">Connect the controller first</string>
+
+    <!-- ━━━━━━━━━━━━ Calibration ━━━━━━━━━━━━ -->
     <string name="calib_title">Calibration</string>
-    <string name="calib_sticks_header">STICKS</string>
-    <string name="calib_deadzone_label">Deadzone</string>
-    <string name="calib_invert_y">Invert Y</string>
-    <string name="calib_calibrate_all">Calibrate All</string>
-    <string name="calib_rumble_header">RUMBLE</string>
-    <string name="calib_test_intensity">Test intensity</string>
-    <string name="calib_test_rumble">Test rumble</string>
-    <string name="calib_rumble_unsupported">Test haptics (game rumble unavailable)</string>
-    <string name="calib_gyro_header">GYRO AIMING</string>
-    <string name="calib_gyro_enable">Enable gyro aiming</string>
+    <string name="calib_subtitle">Stick centres and gyro bias</string>
+    <string name="calib_raw">Raw</string>
+    <string name="calib_offset">Centre offset</string>
+    <string name="calib_pair">%1$6d  %2$6d</string>
+    <string name="calib_centre_label">Sticks</string>
+    <string name="calib_centre_title">Let both sticks rest, then calibrate</string>
+    <string name="calib_centre_body">The resting position becomes the new centre. Deadzones and curves are on the Tuning page.</string>
+    <string name="calib_calibrate_all">Calibrate centres</string>
+    <string name="calib_done">Sticks calibrated</string>
+    <string name="calib_gyro_header">Gyro</string>
+    <string name="calib_gyro_title">Measure the resting drift</string>
+    <string name="calib_gyro_body">Put the controller on a flat surface and leave it still for two seconds.</string>
+    <string name="calib_gyro_enable">Gyro aiming</string>
     <string name="calib_gyro_sensitivity">Horizontal sensitivity</string>
     <string name="calib_gyro_sensitivity_y">Vertical sensitivity</string>
     <string name="calib_gyro_smoothing">Smoothing</string>
@@ -77,92 +134,198 @@
     <string name="calib_gyro_calibrated">Gyro bias calibrated</string>
     <string name="calib_gyro_invert_y">Invert gyro Y</string>
     <string name="calib_gyro_activation">Activation</string>
-    <string name="calib_desktop_header">DESKTOP MODE</string>
-    <string name="calib_mouse_sensitivity">Mouse sensitivity</string>
     <string name="calib_trackpad_switch_label">Trackpads as mouse in gamepad mode</string>
-    <string name="calib_trackpad_hint">When ON, the right trackpad drives a cursor and the left one scrolls - alongside the gamepad.</string>
-    <string name="calib_start_on_boot">Start service after device boot</string>
-    <string name="calib_start_on_connect">Start when controller connects</string>
-    <string name="calib_slider_left_deadzone_desc">Left stick deadzone</string>
-    <string name="calib_slider_right_deadzone_desc">Right stick deadzone</string>
-    <string name="calib_slider_rumble_intensity_desc">Rumble intensity</string>
+    <string name="calib_trackpad_hint">The right trackpad drives a cursor and the left one scrolls, alongside the gamepad</string>
+    <string name="calib_start_on_boot">Start after the Shield boots</string>
+    <string name="calib_start_on_connect">Start when the controller connects</string>
 
-    <!-- ━━━━━━━━━━━━ DebugActivity ━━━━━━━━━━━━ -->
-    <string name="debug_title">HID Debug</string>
-    <string name="debug_readonly_notice">Live controller state - for reference only, not interactive.</string>
-    <string name="debug_face_buttons">FACE BUTTONS</string>
-    <string name="debug_dpad">D-PAD</string>
-    <string name="debug_bumpers_system">BUMPERS / SYSTEM</string>
-    <string name="debug_sticks_pads_compact">STICKS / PADS</string>
-    <string name="debug_grips_back">GRIPS / BACK</string>
-    <string name="debug_triggers_header">TRIGGERS (0-255)</string>
-    <string name="debug_lt">LT</string>
-    <string name="debug_rt">RT</string>
-    <string name="debug_left_stick">LEFT STICK</string>
-    <string name="debug_right_stick">RIGHT STICK</string>
-    <string name="debug_left_trackpad">LEFT TRACKPAD</string>
-    <string name="debug_right_trackpad">RIGHT TRACKPAD</string>
-    <string name="debug_imu_quaternion">IMU QUATERNION</string>
-    <string name="debug_raw_report">RAW REPORT (hex)</string>
-    <string name="debug_btn_a">A</string>
-    <string name="debug_btn_b">B</string>
-    <string name="debug_btn_x">X</string>
-    <string name="debug_btn_y">Y</string>
-    <string name="debug_btn_lb">LB</string>
-    <string name="debug_btn_rb">RB</string>
-    <string name="debug_btn_select">SEL</string>
-    <string name="debug_btn_steam_alt_glyph">☰</string>
-    <string name="debug_btn_start_text">START</string>
-    <string name="debug_btn_qa">QA</string>
-    <string name="debug_dpad_up">▲</string>
-    <string name="debug_dpad_down">▼</string>
-    <string name="debug_dpad_left">◀</string>
-    <string name="debug_dpad_right">▶</string>
-    <string name="debug_btn_l3">L3</string>
-    <string name="debug_btn_r3">R3</string>
-    <string name="debug_btn_lgrip">LGrip</string>
-    <string name="debug_btn_rgrip">RGrip</string>
-    <string name="debug_btn_l4">L4</string>
-    <string name="debug_btn_l5">L5</string>
-    <string name="debug_btn_r4">R4</string>
-    <string name="debug_btn_r5">R5</string>
+    <!-- ━━━━━━━━━━━━ Profiles ━━━━━━━━━━━━ -->
+    <string name="profiles_empty_title">No profiles yet</string>
+    <string name="profiles_active_badge">Active</string>
+    <string name="prof_empty_body">Tune the controller for a game, then save it here as a profile. Bind a profile to apps and it switches by itself when you launch them.</string>
+    <string name="prof_new">New from current</string>
+    <string name="prof_new_title">Save current settings as a profile</string>
+    <string name="prof_save">Save</string>
+    <string name="prof_created">Saved · %1$s</string>
+    <string name="prof_pill">Profile · %1$s</string>
+    <string name="prof_hint_hold">Hold</string>
+    <string name="prof_hint_switch">to switch</string>
+    <string name="prof_mode_gamepad">Gamepad · Xbox 360</string>
+    <string name="prof_mode_desktop">Desktop · mouse and keyboard</string>
+    <string name="prof_not_bound">Not bound to an app</string>
+    <string name="prof_sheet_eyebrow">Profile</string>
+    <string name="prof_apply">Apply</string>
+    <string name="prof_reapply">Apply again</string>
+    <string name="prof_apply_hint">Loads its mappings, curves and gyro now</string>
+    <string name="prof_update">Update from current settings</string>
+    <string name="prof_update_hint">Overwrites it with what is live now; app bindings stay</string>
+    <string name="prof_updated">Updated · %1$s</string>
+    <string name="prof_bind">Bind to apps…</string>
+    <string name="prof_rename">Rename</string>
+    <string name="prof_duplicate">Duplicate</string>
+    <string name="prof_copy_name">%1$s (copy)</string>
+    <string name="prof_delete">Delete</string>
+    <string name="prof_delete_title">Delete “%1$s”?</string>
+    <string name="prof_delete_body">The profile is removed. Live settings stay as they are.</string>
+    <string name="prof_usage_needed">Auto-switch needs Usage access before bound apps can switch profiles.</string>
+    <string name="prof_usage_open">Open settings</string>
+    <string name="prof_quick_eyebrow">Quick switch</string>
+    <string name="prof_quick_title">Profiles</string>
+    <string name="prof_quick_hint">On the controller: hold Steam and press the D-pad left or right</string>
+    <string name="prof_manage">Manage profiles</string>
+    <plurals name="prof_apps">
+        <item quantity="one">%1$d app</item>
+        <item quantity="other">%1$d apps</item>
+    </plurals>
 
-    <!-- ━━━━━━━━━━━━ MappingActivity ━━━━━━━━━━━━ -->
-    <string name="mapping_title">Mapping</string>
-    <string name="mapping_hint">Tap any row to remap it. Changes apply live, no service restart needed.</string>
-
-    <!-- ━━━━━━━━━━━━ ProfilesActivity ━━━━━━━━━━━━ -->
-    <string name="profiles_title">Profiles</string>
-    <string name="profiles_empty_title">No game profiles yet</string>
-    <string name="profiles_empty_body">Tune the controller for a game, then tap Save current to keep it as a preset.\n\nBind a preset to an app and it switches on its own when you launch that app.</string>
-    <string name="profiles_save_current">Save current</string>
-    <string name="profiles_active_badge">ACTIVE</string>
-    <string name="profiles_load">Load</string>
-    <string name="profiles_actions_desc">Profile actions</string>
-    <string name="backup_export_toast">Backup saved</string>
-    <string name="backup_export_failed_toast">Could not save backup: %1$s</string>
-    <string name="backup_import_toast">Restored %1$d game profile(s). Restart the service for full effect.</string>
-    <string name="backup_import_failed_toast">Could not restore backup: %1$s</string>
-
-    <!-- ━━━━━━━━━━━━ AppPickerActivity ━━━━━━━━━━━━ -->
+    <!-- ━━━━━━━━━━━━ App picker ━━━━━━━━━━━━ -->
     <string name="app_picker_title">Bind apps</string>
-    <string name="app_picker_hint">Tick every app that should auto-switch to this profile when launched.</string>
+    <string name="app_picker_hint">Tick every app that should switch to this profile when it opens. Changes save as you go.</string>
+    <string name="app_picker_loading">Loading apps…</string>
+    <string name="app_picker_done">Done</string>
+    <string name="app_picker_gone">Profile no longer exists</string>
+    <string name="app_picker_skip">Skip</string>
+    <string name="app_picker_usage_title">Enable auto-switch?</string>
+    <string name="app_picker_usage_body">To swap profiles when you launch a bound app, allow Steam Controller Bridge “Usage data access” in Android settings. Without it the bindings are saved but nothing switches.</string>
+    <plurals name="app_picker_saved">
+        <item quantity="one">Bound to %1$d app</item>
+        <item quantity="other">Bound to %1$d apps</item>
+    </plurals>
 
-    <!-- ━━━━━━━━━━━━ Connection help dialog ━━━━━━━━━━━━ -->
-    <string name="help_para_puck_slots">The controller uses the right Puck slot by default, and pairing it to another receiver replaces whatever is stored in that slot. To keep two Puck pairings at once, switch into left-slot wireless mode before you pair the second one. After that you can move between the two freely.</string>
-    <string name="help_para_bt_independent">A Bluetooth pairing is stored separately from the Puck slots, so it survives re-pairing either of them.</string>
-    <string name="help_para_power_off">The controller wakes into the connection it used last. To turn it off, hold the Steam button for about 5 seconds, until the chime sounds and the LED goes out.</string>
-    <string name="help_section_wireless">Switching wireless modes</string>
-    <string name="help_para_wireless_intro">Start with the controller off, then power it on holding one of these:</string>
+    <!-- ━━━━━━━━━━━━ Device page ━━━━━━━━━━━━ -->
+    <string name="dev_controller">Steam Controller</string>
+    <string name="dev_connected">Connected</string>
+    <string name="dev_link_lost">Link lost</string>
+    <string name="dev_waiting">Waiting</string>
+    <string name="dev_off">Not running</string>
+    <string name="dev_battery">Battery</string>
+    <string name="dev_battery_unknown">Battery not reported</string>
+    <string name="dev_charging">Charging</string>
+    <string name="dev_link">Link</string>
+    <string name="dev_firmware">Firmware</string>
+    <string name="dev_rate">Report rate</string>
+    <string name="dev_reconnect">Reconnect</string>
+    <string name="dev_test_haptics">Test haptics</string>
+    <string name="dev_health">Bridge health</string>
+    <string name="dev_service">Service</string>
+    <string name="dev_service_on">Running in the background</string>
+    <string name="dev_service_off">Stopped</string>
+    <string name="dev_pad">Virtual pad</string>
+    <string name="dev_pad_up">Up · %1$s</string>
+    <string name="dev_pad_down">Not created yet</string>
+    <string name="dev_pad_idle">Created when the service starts</string>
+    <string name="dev_pad_inject">Limited: Shizuku inject, some apps ignore it. %1$s</string>
+    <string name="dev_shizuku">Shizuku</string>
+    <string name="dev_shizuku_ready">Ready</string>
+    <string name="dev_shizuku_stopped">Not running</string>
+    <string name="dev_shizuku_start">Start</string>
+    <string name="dev_shizuku_permission">Permission needed</string>
+    <string name="dev_shizuku_grant">Grant</string>
+    <string name="dev_shizuku_missing">Not installed</string>
+    <string name="dev_shizuku_install">Install</string>
+    <string name="dev_connection">Connection</string>
+    <string name="dev_transport">Transport</string>
+    <string name="dev_transport_hint">The puck or a cable, or Bluetooth</string>
+    <string name="dev_reconnect_to_apply">Reconnect to apply</string>
+    <string name="dev_bt_device">Controller</string>
+    <string name="dev_bt_device_hint">Paired over Bluetooth</string>
+    <string name="dev_bt_off">Bluetooth is off</string>
+    <string name="dev_bt_off_hint">Turn it on in Android settings, then select to look again</string>
+    <string name="dev_bt_none">No paired Steam Controller</string>
+    <string name="dev_bt_none_hint">Pair it in Android Bluetooth settings first</string>
+    <string name="dev_refresh">Refresh</string>
+    <string name="dev_help_hint">Puck slots, Bluetooth and USB-C</string>
+    <string name="dev_help_eyebrow">Help</string>
+    <string name="dev_help_done">Got it</string>
+    <string name="dev_output">Output</string>
+    <string name="dev_emulate">Emulate</string>
+    <string name="dev_emulate_hint">What the TV sees</string>
+    <string name="dev_emulate_pad">Xbox 360 pad</string>
+    <string name="dev_emulate_desktop">Mouse and keyboard</string>
+    <string name="dev_behaviour">Behaviour</string>
+    <string name="dev_rumble">Rumble strength</string>
+    <string name="dev_rumble_hint">Share of what the game asks for</string>
+    <string name="dev_data">Data</string>
+    <string name="dev_backup_hint">Settings and profiles as one JSON file</string>
+    <string name="dev_restore_hint">Merges profiles, replaces live settings</string>
+    <string name="dev_no_files_app">No file picker on this device</string>
+    <string name="dev_debug">HID debug</string>
+    <string name="dev_debug_hint">Raw reports, every bit, diagnostics export</string>
+    <string name="dev_about">About</string>
+    <string name="dev_source">Source</string>
+    <string name="dev_no_browser">No browser installed</string>
+    <string name="help_dialog_title">Switching connection modes</string>
+    <string name="help_section_wireless">Wireless modes</string>
+    <string name="help_para_wireless_intro">Start with the controller off, then power it on holding one of these.</string>
+    <string name="help_puck_right">Puck, right slot</string>
+    <string name="help_puck_left">Puck, left slot</string>
+    <string name="help_bluetooth">Bluetooth</string>
+    <string name="help_led_white">White LED</string>
+    <string name="help_led_blue">Blue LED</string>
+    <string name="help_para_puck_slots">The controller uses the right puck slot by default, and pairing it to another receiver replaces whatever that slot held. To keep two puck pairings, switch to left-slot mode before pairing the second; after that you can move between them freely.</string>
+    <string name="help_para_bt_independent">A Bluetooth pairing is stored separately from the puck slots, so it survives re-pairing either of them.</string>
     <string name="help_section_wired">Wired over USB-C</string>
+    <string name="help_wired_off">Controller off: plug it in. Chime and a green LED.</string>
+    <string name="help_wired_on">Controller on in another mode: hold Steam while plugging it in. Chime and a green LED.</string>
+    <string name="help_para_power_off">The controller wakes into the connection it used last. To turn it off, hold Steam for about five seconds, until the chime and the LED goes out.</string>
+    <string name="menu_reset_defaults">Reset</string>
+    <string name="menu_export_backup">Export backup</string>
+    <string name="menu_import_backup">Restore backup</string>
+    <string name="menu_log_to_file">Export diagnostics</string>
+    <string name="backup_export_toast">Backup saved</string>
+    <string name="backup_export_failed_toast">Backup failed: %1$s</string>
+    <string name="backup_import_toast">Restored %1$d profiles</string>
+    <string name="backup_import_failed_toast">Restore failed: %1$s</string>
 
-    <!-- ━━━━━━━━━━━━ Menus ━━━━━━━━━━━━ -->
-    <string name="menu_reset_defaults">Reset to defaults</string>
-    <string name="menu_log_to_file">Log to File</string>
-    <string name="menu_save">Save</string>
-    <string name="menu_export_backup">Export backup…</string>
-    <string name="menu_import_backup">Import backup…</string>
+    <!-- ━━━━━━━━━━━━ Debug ━━━━━━━━━━━━ -->
+    <string name="debug_title">HID debug</string>
+    <string name="debug_readonly_notice">Live controller state · read only</string>
+    <string name="debug_buttons">Buttons and touch</string>
+    <string name="debug_axes">Axes</string>
+    <string name="debug_raw_report">Raw report</string>
+    <string name="debug_export_failed">Could not export: %1$s</string>
 
     <!-- ━━━━━━━━━━━━ Gamehub ━━━━━━━━━━━━ -->
-    <string name="main_action_gamehub_title">Gamehub</string>
+    <string name="hub_link">Link</string>
+    <string name="hub_linked">Linked</string>
+    <string name="hub_not_linked">Not linked</string>
+    <string name="hub_linked_as">Linked as %1$s. Captures upload and controller setup syncs from the website.</string>
+    <string name="hub_pending">Upload queue</string>
+    <string name="hub_last_sync">Last sync</string>
+    <string name="hub_all_uploaded">All uploaded</string>
+    <plurals name="hub_waiting">
+        <item quantity="one">%1$d waiting</item>
+        <item quantity="other">%1$d waiting</item>
+    </plurals>
+    <string name="hub_not_synced">Not yet · start the service</string>
+    <string name="hub_last_problem">Last problem: %1$s</string>
+    <string name="hub_sync_now">Sync now</string>
+    <string name="hub_syncing">Syncing with Gamehub</string>
+    <string name="hub_unlink">Unlink</string>
+    <string name="hub_unlink_title">Unlink from Gamehub?</string>
+    <string name="hub_unlink_body">Captures stop uploading and the website can no longer change this Shield\'s setup. You can link again with a new code.</string>
+    <string name="hub_unlinked">Unlinked from Gamehub</string>
+    <string name="hub_pair_title">Link this Shield</string>
+    <string name="hub_pair_body">Upload captures and set up the controller from %1$s.</string>
+    <string name="hub_pair_steps">On the website open Devices, choose Get a code, and enter it here.</string>
+    <string name="hub_code_keys">↑ ↓ change digit · ← → move · or type</string>
+    <string name="hub_link_button">Link</string>
+    <string name="hub_six_digits">Enter all six digits</string>
+    <string name="hub_linking">Linking…</string>
+    <string name="hub_linked_pill">Linked to Gamehub</string>
+    <string name="hub_code_wrong">That code is wrong or has expired. Get a new one.</string>
+    <string name="hub_said">Gamehub said: %1$s</string>
+    <string name="hub_unreachable">Could not reach %1$s: %2$s</string>
+    <string name="hub_boot">Start after a reboot</string>
+    <string name="hub_boot_title">Shizuku and the bridge, without a computer</string>
+    <string name="hub_boot_body">After a reboot the app talks ADB to the Shield itself to start Shizuku, then the bridge.</string>
+    <string name="hub_boot_switch">Start Shizuku and the bridge automatically</string>
+    <string name="hub_test">Test</string>
+    <string name="hub_test_hint">Needs Network debugging on. The first test shows a debugging prompt on the TV: tick Always allow.</string>
+    <string name="hub_testing">Connecting… accept the prompt on the TV if it appears.</string>
+    <string name="hub_test_ok">Ready. After a reboot Shizuku and the bridge start by themselves.</string>
+    <string name="hub_ago_now">Just now</string>
+    <string name="hub_ago_min">%1$d min ago</string>
+    <string name="hub_ago_h">%1$d h ago</string>
+    <string name="hub_ago_days">%1$d days ago</string>
 </resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rail: Controller (mappings). Line icon, tinted in code. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M7.5,6.5h9c2.4,0 3.9,1.6 4.4,4.1l0.9,4.8c0.4,2.2 -0.9,3.6 -2.5,3.6c-1.2,0 -1.9,-0.7 -2.6,-1.9l-0.8,-1.4h-7.8l-0.8,1.4c-0.7,1.2 -1.4,1.9 -2.6,1.9c-1.6,0 -2.9,-1.4 -2.5,-3.6l0.9,-4.8c0.5,-2.5 2,-4.1 4.4,-4.1z"/>
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M8,9.5v3M6.5,11h3"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M15.6,10.2m-1,0a1,1 0,1 1,2 0a1,1 0,1 1,-2 0M17.6,12.2m-1,0a1,1 0,1 1,2 0a1,1 0,1 1,-2 0"/>
+</vector>

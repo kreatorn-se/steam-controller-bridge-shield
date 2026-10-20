@@ -1,67 +1,78 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Always dark, deliberately NOT a DayNight parent: this is an Android TV UI with no
-         light variant, and a DayNight parent resolves to the light scheme unless night mode
-         happens to be on, which repaints every fallback (text, ripples, focus highlights)
-         wrong. Every Material token the app touches is therefore stated explicitly. -->
+    <!-- Always dark, deliberately not DayNight: a TV UI with no light variant. Every Material token
+         the app or a framework dialog touches is mapped to the design tokens, so no default
+         Material purple can surface anywhere (dialogs, switches, ripples, text selection). -->
     <style name="Theme.SteamController" parent="Theme.Material3.Dark.NoActionBar">
-
-        <!-- Accent -->
         <item name="colorPrimary">@color/accent</item>
-        <item name="colorOnPrimary">@color/accent_on</item>
+        <item name="colorOnPrimary">@color/on_accent</item>
         <item name="colorPrimaryContainer">@color/accent_container</item>
-        <item name="colorOnPrimaryContainer">@color/accent_on_container</item>
+        <item name="colorOnPrimaryContainer">@color/text</item>
+        <item name="colorPrimaryInverse">@color/accent</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/on_accent</item>
+        <item name="colorSecondaryContainer">@color/raised</item>
+        <item name="colorOnSecondaryContainer">@color/text</item>
+        <item name="colorTertiary">@color/success</item>
+        <item name="colorOnTertiary">@color/on_accent</item>
+        <item name="colorTertiaryContainer">@color/raised</item>
+        <item name="colorOnTertiaryContainer">@color/text</item>
+        <item name="colorError">@color/danger</item>
+        <item name="colorOnError">@color/on_accent</item>
+        <item name="colorErrorContainer">@color/danger_container</item>
+        <item name="colorOnErrorContainer">@color/danger</item>
 
-        <!-- Secondary: Steam blue, used for the action-card icon badges. -->
-        <item name="colorSecondary">@color/accent_dim</item>
-        <item name="colorOnSecondary">@color/accent_on</item>
-        <item name="colorSecondaryContainer">@color/surface_3</item>
-        <item name="colorOnSecondaryContainer">@color/accent_on_container</item>
+        <item name="colorSurface">@color/bg</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorSurfaceVariant">@color/raised</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorSurfaceContainerLowest">@color/bg</item>
+        <item name="colorSurfaceContainerLow">@color/surface</item>
+        <item name="colorSurfaceContainer">@color/surface</item>
+        <item name="colorSurfaceContainerHigh">@color/sheet</item>
+        <item name="colorSurfaceContainerHighest">@color/surface_2</item>
+        <item name="colorSurfaceBright">@color/raised</item>
+        <item name="colorSurfaceDim">@color/bg</item>
+        <item name="colorOutline">@color/line_strong</item>
+        <item name="colorOutlineVariant">@color/line</item>
+        <item name="colorOnSurfaceInverse">@color/bg</item>
+        <item name="colorSurfaceInverse">@color/text</item>
+        <item name="colorControlHighlight">#1F1A9FFF</item>
+        <item name="colorControlActivated">@color/accent</item>
+        <item name="colorControlNormal">@color/text_secondary</item>
 
-        <!-- Tertiary: mint, for "live" affordances. -->
-        <item name="colorTertiary">@color/status_connected_on_container</item>
-        <item name="colorOnTertiary">@color/accent_on</item>
-        <item name="colorTertiaryContainer">@color/status_connected_container</item>
-        <item name="colorOnTertiaryContainer">@color/status_connected_on_container</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorTertiary">@color/text_tertiary</item>
+        <item name="android:textColorHint">@color/text_tertiary</item>
+        <item name="android:textColorHighlight">#551A9FFF</item>
+        <item name="android:defaultFocusHighlightEnabled">false</item>
 
-        <!-- Error -->
-        <item name="colorError">@color/error_on_container</item>
-        <item name="colorOnError">@color/error_container</item>
-        <item name="colorErrorContainer">@color/error_container</item>
-        <item name="colorOnErrorContainer">@color/error_on_container</item>
+        <item name="android:fontFamily">@font/barlow_regular</item>
+        <item name="fontFamily">@font/barlow_regular</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.SteamController.Dialog</item>
+    </style>
 
-        <!-- Surfaces -->
-        <item name="colorSurface">@color/window_bg</item>
-        <item name="colorOnSurface">@color/text_high</item>
-        <item name="colorSurfaceVariant">@color/surface_3</item>
-        <item name="colorOnSurfaceVariant">@color/text_mid</item>
-        <item name="colorSurfaceContainerLowest">@color/window_bg</item>
-        <item name="colorSurfaceContainerLow">@color/surface_1</item>
-        <item name="colorSurfaceContainer">@color/surface_2</item>
-        <item name="colorSurfaceContainerHigh">@color/surface_3</item>
-        <item name="colorSurfaceContainerHighest">@color/surface_4</item>
-
-        <!-- Outlines: 1dp hairlines on cards, and the base colour of every focus ring. -->
-        <item name="colorOutline">@color/outline</item>
-        <item name="colorOutlineVariant">@color/outline_variant</item>
-
-        <!-- Inverse: the snackbar/contrast pair. -->
-        <item name="colorOnSurfaceInverse">@color/window_bg</item>
-        <item name="colorSurfaceInverse">@color/text_high</item>
-
-        <!-- Window -->
-        <item name="android:windowBackground">@color/window_bg</item>
-        <item name="android:colorBackground">@color/window_bg</item>
-        <item name="android:statusBarColor">@color/window_bg</item>
-        <item name="android:navigationBarColor">@color/window_bg</item>
-
-        <!-- Framework (non-Material) widgets read these instead of colorOnSurface. -->
-        <item name="android:textColorPrimary">@color/text_high</item>
-        <item name="android:textColorSecondary">@color/text_mid</item>
-        <item name="android:textColorTertiary">@color/text_low</item>
-
-        <!-- Tighter, Steam-like type: Roboto Condensed across the app. -->
-        <item name="android:fontFamily">sans-serif-condensed</item>
-        <item name="fontFamily">sans-serif-condensed</item>
+    <!-- Confirmations and name prompts: sheet surface, 12dp corners, accent text buttons. -->
+    <style name="ThemeOverlay.SteamController.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/sheet</item>
+        <item name="colorSurfaceContainerHigh">@color/sheet</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="shapeAppearanceCornerExtraLarge">@style/Shape.SteamController.Dialog</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/Dialog.Title</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/Dialog.Body</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Dialog.Button</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Dialog.Button.Quiet</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Dialog.Button.Quiet</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimAmount">0.6</item>
     </style>
 </resources>

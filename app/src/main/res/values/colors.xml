@@ -1,54 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- ── Surfaces ─────────────────────────────────────────────────────────────
-         Neutral graphite in the spirit of Steam's Big Picture, matching gamehub.kreatorn.se.
-         One ramp, five steps: elevation is surface colour, not shadows. -->
-    <color name="window_bg">#16181C</color>
-    <color name="surface_1">#1B1E23</color>
-    <color name="surface_2">#1F2228</color>
-    <color name="surface_3">#2A2E35</color>
-    <color name="surface_4">#323740</color>
-    <color name="outline">#3E444D</color>
-    <color name="outline_variant">#2A2E35</color>
+    <!-- Design tokens shared with gamehub.kreatorn.se: near-black + Steam blue, "OLED deep".
+         ui/theme/Tokens.kt (object C) carries the same values for custom views; keep both in step. -->
+    <color name="bg">#0B0C0E</color>
+    <color name="surface">#14161A</color>
+    <color name="surface_2">#1B1E23</color>
+    <color name="raised">#22262C</color>
+    <color name="sheet">#111317</color>
+    <color name="line">#23262C</color>
+    <color name="line_strong">#2E3239</color>
 
-    <!-- ── Accent ───────────────────────────────────────────────────────────────
-         Steam blue, used only for focus, selection and the live state. -->
+    <color name="text">#F2F4F7</color>
+    <color name="text_secondary">#8B929C</color>
+    <color name="text_tertiary">#5B626C</color>
+
     <color name="accent">#1A9FFF</color>
-    <color name="accent_on">#04121F</color>
-    <color name="accent_container">#13314A</color>
-    <color name="accent_on_container">#BFE2FF</color>
-    <color name="accent_dim">#66B8F5</color>
+    <color name="on_accent">#04121F</color>
+    <color name="accent_container">#14304A</color>
+    <color name="focus_fill">#18232E</color>
 
-    <!-- Text ramp. Three steps, no more: high = content, mid = labels, low = disabled. -->
-    <color name="text_high">#E6E8EB</color>
-    <color name="text_mid">#A1A7AF</color>
-    <color name="text_low">#6B727B</color>
-
-    <!-- Error state colours. Live / not-ready-yet are the status_* colours below. -->
-    <color name="error_container">#3A1D22</color>
-    <color name="error_on_container">#FFA6A6</color>
-
-    <!-- ── Names the rest of the app already binds to ───────────────────────────
-         Kept deliberately: Kotlin reads these by name, and layouts use them for
-         chips and mapping badges. -->
-
-    <!-- Inactive chip / secondary label text. -->
-    <color name="chip_inactive">#A1A7AF</color>
-
-    <!-- Big Start/Stop button. Unfocused is a dark accent wash so the focused state
-         has somewhere to go - the difference is the whole point of the selector. -->
-    <color name="action_fill">#13314A</color>
-    <color name="action_fill_focused">#1A9FFF</color>
-
-    <color name="status_connected_container">#0F3323</color>
-    <color name="status_connected_on_container">#7BEBA8</color>
-    <color name="status_idle_container">#3A2E12</color>
-    <color name="status_idle_on_container">#F5D08A</color>
-
-    <!-- Classic Xbox 360 face-button colour, used to tint the target chip in MappingActivity rows. -->
-    <color name="btn_xbox_a">#5CC04C</color>
-    <!-- Neutral grey for non-face targets (bumpers, sticks, system) and the SC source chip. -->
-    <color name="btn_neutral">#E8E8E8</color>
-    <!-- Text drawn on those light badges, which stay light on purpose so the glyph reads. -->
-    <color name="on_badge">#0E1A22</color>
+    <color name="success">#3DDC97</color>
+    <color name="warning">#FFB547</color>
+    <color name="danger">#FF5A5F</color>
+    <color name="danger_container">#3A1D22</color>
 </resources>

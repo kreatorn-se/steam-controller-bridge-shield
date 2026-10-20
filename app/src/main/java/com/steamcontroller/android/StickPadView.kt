@@ -2,79 +2,78 @@ package com.steamcontroller.android
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.util.AttributeSet
 import android.view.View
+import com.steamcontroller.android.ui.theme.C
+import kotlin.math.abs
 import kotlin.math.min
 
-// Square 2D view that draws:
-//  - the outer stick range (circle)
-//  - the deadzone radius (faded circle)
-//  - the current calibrated position (dot)
+/**
+ * Square stick preview for Calibration: travel circle, crosshair, the deadzone, and the calibrated
+ * position. Callers pass Y already flipped for display (the controller reports up as +Y).
+ */
 class StickPadView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
-    defStyle: Int = 0
+    defStyle: Int = 0,
 ) : View(context, attrs, defStyle) {
 
-    // Values in normalized [-1, 1] range
     var posX: Float = 0f
     var posY: Float = 0f
     var deadzoneFraction: Float = 0.08f
+        set(v) { field = v; invalidate() }
 
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 3f
-        color = Color.parseColor("#3E444D")
-    }
-    private val deadzonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.parseColor("#33000000")
-    }
-    private val crosshairPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1f
-        color = Color.parseColor("#33FFFFFF")
-    }
-    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.parseColor("#1A9FFF")
-    }
+    private val d = resources.displayMetrics.density
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val dash = DashPathEffect(floatArrayOf(2f * d, 3f * d), 0f)
 
     fun setPosition(x: Float, y: Float) {
-        posX = x.coerceIn(-1f, 1f)
-        posY = y.coerceIn(-1f, 1f)
+        val nx = x.coerceIn(-1f, 1f)
+        val ny = y.coerceIn(-1f, 1f)
+        if (abs(nx - posX) < 0.003f && abs(ny - posY) < 0.003f) return
+        posX = nx
+        posY = ny
         invalidate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = MeasureSpec.getSize(heightMeasureSpec)
-        val size = min(w, h)
+        val size = min(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
         setMeasuredDimension(size, size)
     }
 
     override fun onDraw(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
-        val radius = (min(width, height) / 2f) - 6f
-
-        // Outer ring
-        canvas.drawCircle(cx, cy, radius, ringPaint)
-
-        // Crosshair
-        canvas.drawLine(cx, cy - radius, cx, cy + radius, crosshairPaint)
-        canvas.drawLine(cx - radius, cy, cx + radius, cy, crosshairPaint)
-
-        // Deadzone
+        val r = min(width, height) / 2f - 10f * d
+        p.pathEffect = null
+        p.style = Paint.Style.FILL
+        p.color = C.surface2
+        canvas.drawCircle(cx, cy, r, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = d
+        p.color = 0x0DFFFFFF
+        canvas.drawLine(cx - r, cy, cx + r, cy, p)
+        canvas.drawLine(cx, cy - r, cx, cy + r, p)
+        p.color = C.lineStrong
+        canvas.drawCircle(cx, cy, r, p)
         if (deadzoneFraction > 0f) {
-            canvas.drawCircle(cx, cy, radius * deadzoneFraction, deadzonePaint)
+            p.style = Paint.Style.FILL
+            p.color = 0x0AFFFFFF
+            canvas.drawCircle(cx, cy, r * deadzoneFraction, p)
+            p.style = Paint.Style.STROKE
+            p.pathEffect = dash
+            p.color = C.text3
+            canvas.drawCircle(cx, cy, r * deadzoneFraction, p)
+            p.pathEffect = null
         }
-
-        // Position dot
-        val dotX = cx + posX * radius
-        val dotY = cy + posY * radius
-        canvas.drawCircle(dotX, dotY, 10f, dotPaint)
+        val x = cx + posX * r
+        val y = cy + posY * r
+        p.style = Paint.Style.FILL
+        p.color = C.alpha(C.accent, 0.25f)
+        canvas.drawCircle(x, y, 11f * d, p)
+        p.color = C.accent
+        canvas.drawCircle(x, y, 6f * d, p)
     }
 }

@@ -93,19 +93,9 @@
             android:parentActivityName=".MainActivity" />
 
         <activity
-            android:name=".MappingActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
-
-        <activity
-            android:name=".ProfilesActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
-
-        <activity
             android:name=".AppPickerActivity"
             android:exported="false"
-            android:parentActivityName=".ProfilesActivity" />
+            android:parentActivityName=".MainActivity" />
 
         <receiver
             android:name=".service.AutoStartReceiver"
