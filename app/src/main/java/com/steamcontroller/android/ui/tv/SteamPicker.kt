@@ -95,7 +95,8 @@ object SteamPicker {
                 if (wait > 0) delay(wait)
                 val r = withContext(Dispatchers.IO) { GamehubTv.steamApps(ctx, q) }
                 when (r) {
-                    is GamehubTv.Res.Ok -> render(r.value.sortedByDescending { it.lastPlayed })
+                    // The hub's order: most played lately first.
+                    is GamehubTv.Res.Ok -> render(r.value)
                     is GamehubTv.Res.Err -> {
                         list.removeAllViews()
                         list.addView(Kit.body(ctx, ctx.getString(if (r.fail == GamehubTv.Fail.NOT_DEPLOYED) R.string.steam_bind_update else R.string.steam_bind_offline), 13f, C.text2))

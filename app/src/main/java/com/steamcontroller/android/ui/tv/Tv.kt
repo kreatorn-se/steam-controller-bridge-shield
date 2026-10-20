@@ -112,6 +112,6 @@ object HomeTiming {
         val line = "home $phase +${ms}ms" + (if (detail.isNotEmpty()) " $detail" else "")
         android.util.Log.i("GamehubTV", line)
         com.steamcontroller.android.service.Diagnostics.record("tv", line)
-        com.steamcontroller.android.hub.Diag.note(line)
+        com.steamcontroller.android.hub.Diag.note(line, "i", "Home")
     }
 }

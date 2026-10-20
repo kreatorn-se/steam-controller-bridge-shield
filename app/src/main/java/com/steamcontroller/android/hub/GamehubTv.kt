@@ -39,6 +39,8 @@ object GamehubTv {
         val source: String?,
         @Volatile var status: String?,
         @Volatile var people: List<String>,
+        /** Ids of [people], same order (people are tagged by id). */
+        @Volatile var peopleIds: List<String> = emptyList(),
         val note: String?,
         val previewUrl: String,
         val fullUrl: String,
@@ -220,10 +222,12 @@ object GamehubTv {
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
     }
 
-    fun setPeople(c: Context, shotId: String, add: List<String>, remove: List<String>): Res<Unit> {
+    /** Tags by person id (from /people); returns the updated capture when the hub sends it. */
+    fun setPeople(c: Context, shotId: String, add: List<String>, remove: List<String>): Res<Shot?> {
         val body = JSONObject().put("add", JSONArray(add)).put("remove", JSONArray(remove))
         val r = send(c, "POST", "/api/device/v1/shots/" + seg(shotId) + "/people", body.toString(), newEndpoint = true)
-        return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
+        if (r !is Res.Ok) return r as Res.Err
+        return Res.Ok(runCatching { shotOf(JSONObject(r.value)) }.getOrNull())
     }
 
     private fun achievementsOf(a: JSONArray?): List<Achievement> {
@@ -298,8 +302,11 @@ object GamehubTv {
     fun now(c: Context): Res<Now?> {
         val r = get(c, "/api/device/v1/now")
         if (r !is Res.Ok) return r as Res.Err
+        // The hub answers the literal `null` when nothing is playing.
+        val t = r.value.trim()
+        if (t.isEmpty() || t == "null") return Res.Ok(null)
         return try {
-            val o = JSONObject(r.value)
+            val o = JSONObject(t)
             val n = if (o.has("nowPlaying")) o.optJSONObject("nowPlaying") else o
             val appid = n?.optLong("appid", 0L) ?: 0L
             Res.Ok(if (n == null || appid <= 0L) null else Now(appid, str(n, "game")))
@@ -481,6 +488,7 @@ object GamehubTv {
             source = str(o, "source"),
             status = str(o, "status"),
             people = people,
+            peopleIds = o.optJSONArray("peopleIds")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).takeIf { v -> v.isNotBlank() } } } ?: emptyList(),
             note = str(o, "note"),
             previewUrl = preview,
             fullUrl = full,

@@ -426,7 +426,7 @@
     <string name="hold_album_new">New album</string>
     <string name="hold_album_done">Added to %1$s</string>
     <string name="hold_people">Tag people…</string>
-    <string name="hold_people_new">New person</string>
+    <string name="hold_people_none">Nobody to tag yet: add people on the website</string>
     <string name="hold_background">Use as this game\'s background</string>
     <string name="hold_background_done">Background · %1$s</string>
     <string name="hold_slideshow">Start slideshow from here</string>

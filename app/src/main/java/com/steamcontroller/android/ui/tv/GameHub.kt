@@ -160,11 +160,8 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
             if (cached != null && hub == null) renderHub(cached)
             val r = withContext(Dispatchers.IO) { GamehubTv.gameHub(ctx, game) }
             if (closed) return@launch
-            when (r) {
-                is GamehubTv.Res.Ok -> { GamehubTv.Missing.clear(ctx, "hub"); renderHub(r.value) }
-                // A hub without the new call still has the captures: show them, no stats.
-                is GamehubTv.Res.Err -> if (r.fail == GamehubTv.Fail.NOT_DEPLOYED) GamehubTv.Missing.mark(ctx, "hub")
-            }
+            // A 404 (an older hub, or a game it does not know) still shows the captures, no stats.
+            if (r is GamehubTv.Res.Ok) renderHub(r.value)
         }
         load()
     }

@@ -145,19 +145,25 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             }
             start()
         }
-        main.postDelayed({
-            if (!armed) return@postDelayed
+        pendingFire = fire
+        main.removeCallbacks(fireRunnable)
+        main.postDelayed(fireRunnable, HOLD_MS)
+    }
+
+    private var pendingFire: (() -> Unit)? = null
+    private val fireRunnable = Runnable {
+        if (armed) {
             armed = false
             fired = true
             target?.isPressed = false
             ring.animate().alpha(0f).setDuration(Motion.FAST).start()
-            fire()
-        }, HOLD_MS)
+            pendingFire?.invoke()
+        }
     }
 
     fun cancel() {
         armed = false
-        main.removeCallbacksAndMessages(null)
+        main.removeCallbacks(fireRunnable)
         ringAnim?.cancel()
         ring.alpha = 0f
     }
@@ -384,40 +390,42 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             ctx.lifecycleScope.launch {
                 val list = withContext(Dispatchers.IO) { GamehubTv.people(ctx).valueOrNull() ?: GamehubTv.cachedList(ctx, "people") ?: emptyList() }
                 if (menu == null) return@launch
-                renderPeople(list.map { it.title })
+                // People are tagged by id; the hub's /people list has both.
+                renderPeople(list.map { it.collection.removePrefix("person:") to it.title })
             }
         }
 
-        private fun renderPeople(names: List<String>) {
-            val all = (names + shot.people).distinct()
+        private fun renderPeople(all: List<Pair<String, String>>) {
             rows { r ->
-                for (n in all) {
-                    val on = n in shot.people
-                    r.add(row(n, tag = if (on) "✓" else null) { togglePerson(n, names) })
+                if (all.isEmpty()) r.add(row(ctx.getString(R.string.hold_people_none)) {})
+                for ((id, name) in all) {
+                    val on = id in shot.peopleIds || (shot.peopleIds.isEmpty() && name in shot.people)
+                    r.add(row(name, tag = if (on) "✓" else null) { togglePerson(id, name, on, all) })
                 }
-                r.add(row(ctx.getString(R.string.hold_people_new)) {
-                    ProfileOps.promptName(ctx, ctx.getString(R.string.hold_people_new), "") { n -> if (n.isNotBlank()) togglePerson(n.trim(), names) }
-                })
             }
         }
 
-        private fun togglePerson(name: String, names: List<String>) {
-            val on = name !in shot.people
-            val before = shot.people
-            val now = if (on) before + name else before - name
-            setPeople(now)
-            renderPeople(names)
+        private fun togglePerson(id: String, name: String, wasOn: Boolean, all: List<Pair<String, String>>) {
+            val beforeIds = shot.peopleIds
+            val beforeNames = shot.people
+            if (wasOn) { shot.peopleIds = beforeIds - id; shot.people = beforeNames - name }
+            else { shot.peopleIds = beforeIds + id; shot.people = beforeNames + name }
+            renderPeople(all)
             ctx.lifecycleScope.launch {
-                val r = withContext(Dispatchers.IO) { GamehubTv.setPeople(ctx, shot.id, if (on) listOf(name) else emptyList(), if (on) emptyList() else listOf(name)) }
-                if (r is GamehubTv.Res.Err) {
-                    setPeople(before)
-                    failed(r, "people")
-                    if (menu != null) renderPeople(names)
-                } else hc.changed(item, false)
+                val r = withContext(Dispatchers.IO) { GamehubTv.setPeople(ctx, shot.id, if (wasOn) emptyList() else listOf(id), if (wasOn) listOf(id) else emptyList()) }
+                when (r) {
+                    is GamehubTv.Res.Ok -> {
+                        r.value?.let { fresh -> shot.people = fresh.people; shot.peopleIds = fresh.peopleIds }
+                        hc.changed(item, false)
+                    }
+                    is GamehubTv.Res.Err -> {
+                        shot.peopleIds = beforeIds; shot.people = beforeNames
+                        failed(r, "people")
+                    }
+                }
+                if (menu != null && stack.isNotEmpty()) renderPeople(all)
             }
         }
-
-        private fun setPeople(list: List<String>) { shot.people = list }
 
         private fun info() = page {
             rows { r ->

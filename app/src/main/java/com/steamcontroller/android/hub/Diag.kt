@@ -14,7 +14,8 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * Diagnostics to Gamehub (POST /api/device/v1/diag): the existing Diagnostics history plus the
+ * Diagnostics to Gamehub (POST /api/device/v1/diag, `{appVersion, logs: [{t, level, tag, msg}],
+ * crashes: [{t, thread, stack, appVersion}]}`): the existing Diagnostics history plus the
  * TV's own notes (home load timings), in batches every two minutes while the app or the
  * controller service runs, at once after an error, and a crash report on the next start.
  *
@@ -26,9 +27,11 @@ object Diag {
     private const val K_ON = "upload"
     private const val MAX_BATCH = 200
     private const val MAX_CRASH = 16 * 1024
+    private const val MAX_MSG = 300
 
     private val exec = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "diag").apply { isDaemon = true } }
-    private val notes = ArrayList<String>()
+    private class Note(val t: Long, val level: String, val tag: String, val msg: String)
+    private val notes = ArrayList<Note>()
     private var mark = 0L
     private var soon: ScheduledFuture<*>? = null
     @Volatile private var app: Context? = null
@@ -53,16 +56,16 @@ object Diag {
     }
 
     /** A line of the TV's own (timings, states). */
-    fun note(line: String) {
+    fun note(line: String, level: String = "i", tag: String = "tv") {
         synchronized(notes) {
             if (notes.size >= MAX_BATCH) notes.removeAt(0)
-            notes.add(redact(line))
+            notes.add(Note(System.currentTimeMillis(), level, tag, redact(line).take(MAX_MSG)))
         }
     }
 
     /** Something went wrong: note it and send soon. */
     fun error(line: String) {
-        note("ERROR $line")
+        note(line, "e")
         flushSoon(5_000L)
     }
 
@@ -82,19 +85,24 @@ object Diag {
             crashFiles(c).forEach { it.delete() }
             return
         }
-        for (f in crashFiles(c)) {
-            val text = try { f.readText().take(MAX_CRASH) } catch (_: Throwable) { "" }
-            val r = send(c, JSONArray(), text)
-            if (r != Sent.RETRY) f.delete()
+        val files = crashFiles(c)
+        if (files.isNotEmpty()) {
+            val crashes = JSONArray()
+            for (f in files) try { crashes.put(JSONObject(f.readText())) } catch (_: Throwable) {}
+            val r = send(c, JSONArray(), crashes)
+            if (r != Sent.RETRY) files.forEach { it.delete() }
             if (r == Sent.MISSING) return
         }
         val (newMark, recent) = Diagnostics.since(mark)
-        val batch = JSONArray()
-        for (l in recent) batch.put(redact(l))
+        val logs = JSONArray()
+        val now = System.currentTimeMillis()
+        // The service's history: each line carries its own timestamp in the text.
+        // Kept under the hub's 64 KB per request.
+        for (l in recent.takeLast(80)) logs.put(JSONObject().put("t", now).put("level", "i").put("tag", "app").put("msg", redact(l).take(MAX_MSG)))
         val ours = synchronized(notes) { val copy = notes.toList(); notes.clear(); copy }
-        for (l in ours) batch.put(l)
-        if (batch.length() == 0) { mark = newMark; return }
-        when (send(c, batch, null)) {
+        for (n in ours.takeLast(70)) logs.put(JSONObject().put("t", n.t).put("level", n.level).put("tag", n.tag).put("msg", n.msg))
+        if (logs.length() == 0) { mark = newMark; return }
+        when (send(c, logs, null)) {
             Sent.OK, Sent.MISSING -> mark = newMark
             Sent.RETRY -> synchronized(notes) { notes.addAll(0, ours.takeLast(MAX_BATCH / 2)) }
         }
@@ -102,13 +110,11 @@ object Diag {
 
     private enum class Sent { OK, RETRY, MISSING }
 
-    private fun send(c: Context, lines: JSONArray, crash: String?): Sent {
+    private fun send(c: Context, logs: JSONArray, crashes: JSONArray?): Sent {
         val body = JSONObject()
-            .put("appVersion", BuildConfig.VERSION_NAME)
-            .put("versionCode", BuildConfig.VERSION_CODE)
-            .put("device", JSONObject().put("model", Build.MODEL ?: "").put("sdk", Build.VERSION.SDK_INT))
-            .put("lines", lines)
-        if (crash != null) body.put("crash", crash)
+            .put("appVersion", BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ") " + (Build.MODEL ?: "") + " sdk " + Build.VERSION.SDK_INT)
+            .put("logs", logs)
+        if (crashes != null) body.put("crashes", crashes)
         return when (val r = GamehubTv.postDiag(c, body.toString())) {
             is GamehubTv.Res.Ok -> Sent.OK
             is GamehubTv.Res.Err -> when (r.fail) {
@@ -126,8 +132,9 @@ object Diag {
         val c = app ?: return
         val sw = StringWriter()
         e.printStackTrace(PrintWriter(sw))
-        val text = "thread=${t.name} version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" + redact(sw.toString()).take(MAX_CRASH)
-        File(crashDir(c), "crash-${System.currentTimeMillis()}.txt").writeText(text)
+        val o = JSONObject().put("t", System.currentTimeMillis()).put("thread", t.name)
+            .put("stack", redact(sw.toString()).take(MAX_CRASH)).put("appVersion", BuildConfig.VERSION_NAME)
+        File(crashDir(c), "crash-${System.currentTimeMillis()}.json").writeText(o.toString())
     }
 
     private val HEX = Regex("""\b[0-9a-fA-F]{32,}\b""")
