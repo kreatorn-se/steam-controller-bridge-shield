@@ -25,6 +25,11 @@ import com.steamcontroller.android.ui.widget.Kit
  * bias. Deadzones, curves and the rest of the tuning live on the Tuning page.
  */
 class CalibrationActivity : AppCompatActivity() {
+
+    // The UI at 85 % on a TV (ui/tv/TvScale).
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.steamcontroller.android.ui.tv.TvScale.wrap(newBase))
+    }
     private lateinit var ticker: LiveTicker
     private var leftCal = StickCalibration()
     private var rightCal = StickCalibration()

@@ -41,6 +41,9 @@ class LibraryPage(host: Host) : Page(host) {
     private val tabs = Kit.row(ctx)
     /** ↑ from the grid lands on the current tab, never a neighbour (which would switch tabs). */
     private val tabsMemory = FocusMemoryFrame(ctx)
+    private val sortRow = Kit.row(ctx)
+    private val sortViews = LinkedHashMap<String, TextView>()
+    private var sort = "recent"
     private val tabViews = LinkedHashMap<Tab, TextView>()
     private val gridMemory = FocusMemoryFrame(ctx)
     private val grid = TvRecycler(ctx, TvRecycler.LOCK_RIGHT or TvRecycler.LOCK_DOWN)
@@ -72,6 +75,16 @@ class LibraryPage(host: Host) : Page(host) {
         tabsMemory.fallback = { tabViews[tab] }
         tabsMemory.remembered = tabViews[tab]
         col.addView(tabsMemory, Kit.lp(l = -3, ctx = ctx))
+        // Games: sorted by the hub (recent, captures, playtime, name); each opens its hub.
+        sortRow.clipChildren = false
+        for ((key, label) in SORTS) {
+            val b = Kit.button(ctx, ctx.getString(label), Kit.Btn.GHOST) { setSort(key) }
+            sortViews[key] = b
+            sortRow.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(2) })
+        }
+        sortRow.addView(Kit.label(ctx, ctx.getString(R.string.lib_sort), 10.5f, C.text3), 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(6); marginEnd = ctx.dp(8) })
+        col.addView(sortRow, Kit.lp(l = -3, t = 2, ctx = ctx))
+        renderSort()
         val body = FrameLayout(ctx)
         body.clipChildren = false
         grid.setPadding(0, ctx.dp(14), 0, ctx.dp(40))
@@ -132,7 +145,7 @@ class LibraryPage(host: Host) : Page(host) {
         if (fetching) return
         fetching = true
         host.activity.lifecycleScope.launch {
-            val g = withContext(Dispatchers.IO) { GamehubTv.games(ctx) }
+            val g = withContext(Dispatchers.IO) { gamesSorted() }
             applyList(Tab.GAMES, g)
             val a = withContext(Dispatchers.IO) { GamehubTv.albums(ctx) }
             applyList(Tab.ALBUMS, a)
@@ -184,6 +197,36 @@ class LibraryPage(host: Host) : Page(host) {
         renderMessage(tab, a.itemCount == 0)
     }
 
+    private fun renderSort() {
+        sortRow.visibility = if (tab == Tab.GAMES) View.VISIBLE else View.GONE
+        for ((k, v) in sortViews) { v.isActivated = k == sort; v.setTextColor(if (k == sort) C.text else C.text2) }
+    }
+
+    private fun setSort(key: String) {
+        if (key == sort) return
+        sort = key
+        renderSort()
+        host.activity.lifecycleScope.launch {
+            val g = withContext(Dispatchers.IO) { gamesSorted() }
+            applyList(Tab.GAMES, g)
+            grid.scrollToPosition(0)
+        }
+    }
+
+    /** The hub's sorted list; an older hub without ?sort gets the plain list sorted here. */
+    private fun gamesSorted(): GamehubTv.Res<List<Coll>> {
+        val r = GamehubTv.gamesSorted(ctx, sort)
+        val list = r.valueOrNull() ?: GamehubTv.games(ctx).valueOrNull() ?: return r
+        GameArt.putAll(list)
+        val sorted = when (sort) {
+            "captures" -> list.sortedByDescending { it.count }
+            "playtime" -> list.sortedByDescending { it.playtimeMin }
+            "name" -> list.sortedBy { it.title.lowercase() }
+            else -> if (r is GamehubTv.Res.Ok) list else list.sortedByDescending { it.last }
+        }
+        return GamehubTv.Res.Ok(sorted)
+    }
+
     private fun renderTabs() {
         for ((t, v) in tabViews) {
             val n = if (t == Tab.FAVOURITES) favs.size else lists[t]?.size
@@ -197,6 +240,7 @@ class LibraryPage(host: Host) : Page(host) {
         if (t == tab) return
         tab = t
         tabsMemory.remembered = tabViews[t]
+        renderSort()
         show(t)
     }
 
@@ -218,6 +262,7 @@ class LibraryPage(host: Host) : Page(host) {
                 Img.into(tile.image, shot.previewUrl, spec)
                 tile.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot))
                 tile.card.setOnClickListener { playFavourites(shot) }
+                tile.card.holdItem(HoldItem(shot, CollRef("favourites", ctx.getString(R.string.tv_favourites)), favs))
                 if (i >= favs.size - span * 2) loadMoreFavs()
             }
             empty = favs.isEmpty()
@@ -227,6 +272,7 @@ class LibraryPage(host: Host) : Page(host) {
                 val tile = v as Tile
                 bind(tile, c, t, spec)
                 tile.card.setOnClickListener { val p = grid.getChildAdapterPosition(tile); if (p >= 0) play(t, p) }
+                tile.card.holdItem(null)
             }
             empty = items.isEmpty()
         }
@@ -283,6 +329,7 @@ class LibraryPage(host: Host) : Page(host) {
 
     private fun play(t: Tab, i: Int) {
         val items = lists[t] ?: return
+        if (t == Tab.GAMES) { items.getOrNull(i)?.let { host.openGame(it.title) }; return }
         host.openShow(ShowRequest(items.map { CollRef(it.collection, it.title) }, i))
     }
 
@@ -292,6 +339,10 @@ class LibraryPage(host: Host) : Page(host) {
     }
 
     override fun onHide() { handler.removeCallbacksAndMessages(null) }
+
+    private companion object {
+        val SORTS = listOf("recent" to R.string.lib_sort_recent, "captures" to R.string.lib_sort_captures, "playtime" to R.string.lib_sort_playtime, "name" to R.string.lib_sort_name)
+    }
 
     override fun releaseImages() {
         for (k in 0 until grid.childCount) (grid.getChildAt(k) as? Tile)?.let { Img.release(it.image) }

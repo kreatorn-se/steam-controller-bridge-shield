@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Television, 1080p at xhdpi (960 × 540 dp): 5 % overscan-safe margins. -->
+<!-- Television, 1080p at xhdpi scaled to 85 % (ui/tv/TvScale: about 1129 x 635 dp at 1.7 px/dp):
+     5 % overscan-safe margins, 96 x 54 px. -->
 <resources>
-    <dimen name="safe_h">48dp</dimen>
-    <dimen name="safe_v">27dp</dimen>
+    <dimen name="safe_h">57dp</dimen>
+    <dimen name="safe_v">32dp</dimen>
 </resources>

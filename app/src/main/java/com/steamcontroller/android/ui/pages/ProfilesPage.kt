@@ -194,10 +194,7 @@ class ProfilesPage(host: Host) : Page(host) {
         refocus?.requestFocus()
 
         usageRow.removeAllViews()
-        if (list.any { it.boundPackages.isNotEmpty() } && !UsageStatsHelper.hasPermission(ctx)) {
-            usageRow.addView(Kit.body(ctx, ctx.getString(R.string.prof_usage_needed), 13f, C.warning), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            usageRow.addView(Kit.button(ctx, ctx.getString(R.string.prof_usage_open)) { UsageStatsHelper.openSettingsScreen(ctx) })
-        }
+        usageRow.addView(Kit.body(ctx, ctx.getString(R.string.prof_now_playing_note), 13f, C.text3), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
 
     private fun card(p: NamedProfile, active: Boolean): View {
@@ -219,19 +216,8 @@ class ProfilesPage(host: Host) : Page(host) {
         val gp = GamepadProfile.fromId(p.profileId)
         card.addView(Kit.label(ctx, if (gp.isMouseMode) ctx.getString(R.string.prof_mode_desktop) else ctx.getString(R.string.prof_mode_gamepad), 11f, C.text2), Kit.lp(t = 6, ctx = ctx))
         card.addView(View(ctx), LinearLayout.LayoutParams(1, 0, 1f))
-        val apps = Kit.row(ctx)
-        if (p.boundPackages.isEmpty()) {
-            apps.addView(Kit.label(ctx, ctx.getString(R.string.prof_not_bound), 10.5f, C.text3))
-        } else {
-            for (pkg in p.boundPackages.take(5)) {
-                val iv = ImageView(ctx)
-                apps.addView(iv, LinearLayout.LayoutParams(ctx.dp(24), ctx.dp(24)).apply { marginEnd = ctx.dp(6) })
-                loadIcon(pkg, iv)
-            }
-            val label = if (p.boundPackages.size > 5) "+${p.boundPackages.size - 5} · " else ""
-            apps.addView(Kit.label(ctx, label + ctx.resources.getQuantityString(R.plurals.prof_apps, p.boundPackages.size, p.boundPackages.size), 10.5f, C.text2))
-        }
-        card.addView(apps)
+        // The Steam games this profile follows (see actions()).
+        if (p.steamAppIds.isNotEmpty()) card.addView(Kit.label(ctx, ctx.resources.getQuantityString(R.plurals.steam_games, p.steamAppIds.size, p.steamAppIds.size), 10.5f, C.accent))
         card.setOnFocusChangeListenerChained { has -> name.setTextColor(if (has) C.text else C.text) }
         return card
     }
@@ -258,11 +244,13 @@ class ProfilesPage(host: Host) : Page(host) {
             Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(R.string.prof_updated, p.name))
             render()
         })
-        sheet.body.addView(ListRow(ctx, ctx.getString(R.string.prof_bind), ctx.resources.getQuantityString(R.plurals.prof_apps, p.boundPackages.size, p.boundPackages.size)) {
+        // "Bind to apps" is gone: on the Shield everything runs inside GeForce NOW, so the
+        // foreground app never tells games apart. Profiles follow Steam games instead
+        // (NamedProfile.steamAppIds, applied by hub/SteamSwitch); app bindings stay in the data.
+        sheet.body.addView(ListRow(ctx, ctx.getString(R.string.steam_bind),
+            if (p.steamAppIds.isEmpty()) ctx.getString(R.string.steam_bind_none_yet) else ctx.resources.getQuantityString(R.plurals.steam_games, p.steamAppIds.size, p.steamAppIds.size)) {
             host.closeSheet()
-            ctx.startActivity(Intent(ctx, AppPickerActivity::class.java)
-                .putExtra(AppPickerActivity.EXTRA_PROFILE_ID, p.id)
-                .putStringArrayListExtra(AppPickerActivity.EXTRA_PRESELECTED, ArrayList(p.boundPackages)))
+            com.steamcontroller.android.ui.tv.SteamPicker.open(host, p.id) { render() }
         })
         sheet.body.addView(ListRow(ctx, ctx.getString(R.string.prof_rename), null) {
             host.closeSheet()
@@ -270,7 +258,7 @@ class ProfilesPage(host: Host) : Page(host) {
         })
         sheet.body.addView(ListRow(ctx, ctx.getString(R.string.prof_duplicate), null) {
             host.closeSheet()
-            Prefs.saveNamedProfile(ctx, p.copy(id = java.util.UUID.randomUUID().toString(), name = ctx.getString(R.string.prof_copy_name, p.name), boundPackages = emptyList()))
+            Prefs.saveNamedProfile(ctx, p.copy(id = java.util.UUID.randomUUID().toString(), name = ctx.getString(R.string.prof_copy_name, p.name), boundPackages = emptyList(), steamAppIds = emptyList()))
             render()
         })
         sheet.body.addView(ListRow(ctx, ctx.getString(R.string.prof_delete), null, titleColor = C.danger) {

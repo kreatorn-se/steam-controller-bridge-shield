@@ -574,11 +574,8 @@ object Prefs {
                 it.name to getDesktopMapping(context, it).name
             }
         val gyro = getGyroTuning(context)
-        val boundPkgs =
-            existingId?.let { id ->
-                listNamedProfiles(context).firstOrNull { it.id == id }?.boundPackages
-            }
-                ?: emptyList()
+        val existing = existingId?.let { id -> listNamedProfiles(context).firstOrNull { it.id == id } }
+        val boundPkgs = existing?.boundPackages ?: emptyList()
         return NamedProfile(
             id =
                 existingId ?: java.util.UUID
@@ -617,6 +614,7 @@ object Prefs {
             leftCurve = getStickCurve(context, true),
             rightCurve = getStickCurve(context, false),
             padAccel = getPadAcceleration(context),
+            steamAppIds = existing?.steamAppIds ?: emptyList(),
         )
     }
 

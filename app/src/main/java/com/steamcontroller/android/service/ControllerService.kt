@@ -354,6 +354,9 @@ class ControllerService : Service() {
         btManager = BluetoothHidManager(this)
         uinput = UInputGamepad(this, Prefs.getProfile(this))
         com.steamcontroller.android.hub.GamehubSync.start(this)
+        // Gamehub background work (diagnostics, Steam profile switch, update check); off the
+        // input path, on its own thread.
+        com.steamcontroller.android.hub.Background.start(this, "service")
         uinput.onRumble = { strong, weak -> forwardRumble(strong, weak) }
         createNotificationChannel()
         _serviceStateFlow.value =
@@ -510,6 +513,9 @@ class ControllerService : Service() {
     private var loggedNoUsagePerm = false
 
     private fun tickForegroundAppMonitor() {
+        // On the Shield everything runs inside GeForce NOW, so the foreground app says nothing about
+        // the game: profiles follow Steam's Now playing instead (hub/SteamSwitch). Kept for phones.
+        if (packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) return
         if (!UsageStatsHelper.hasPermission(this)) {
             if (!loggedNoUsagePerm) {
                 Log.w(TAG, "Auto-switch inert: PACKAGE_USAGE_STATS not granted")
@@ -1846,6 +1852,7 @@ class ControllerService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        com.steamcontroller.android.hub.Background.stop("service")
         try {
             unregisterReceiver(usbReceiver)
         } catch (_: Throwable) {

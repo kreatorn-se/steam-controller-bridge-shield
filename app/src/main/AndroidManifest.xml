@@ -121,27 +121,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- After a self-update (update/Updater): bring the service and the app back. -->
+        <receiver
+            android:name=".update.UpdateReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Boot-time Shizuku retries scheduled by AutoStartReceiver. Not exported. -->
         <receiver
             android:name=".service.ShizukuRetryReceiver"
             android:enabled="true"
             android:exported="false" />
-
-        <!-- Gamehub as the system screen saver. Shield: Settings → Device Preferences →
-             Screen saver → Screen saver → Gamehub. -->
-        <service
-            android:name=".screensaver.GamehubDream"
-            android:exported="true"
-            android:label="@string/dream_label"
-            android:permission="android.permission.BIND_DREAM_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.dreams.DreamService" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-            <meta-data
-                android:name="android.service.dream"
-                android:resource="@xml/gamehub_dream" />
-        </service>
 
         <service
             android:name=".service.ControllerService"

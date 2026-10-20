@@ -69,6 +69,11 @@ object Img {
     private val visiblePool: ExecutorService = ThreadPoolExecutor(3, 3, 30, TimeUnit.SECONDS, object : LinkedBlockingDeque<Runnable>() {
         override fun offer(e: Runnable): Boolean = offerFirst(e)
     }, threads("img", Process.THREAD_PRIORITY_DEFAULT)).apply { allowCoreThreadTimeOut(true) }
+    // The one picture that matters most right now (the home hero, show mode's current image):
+    // its own thread, so a screenful of thumbnails can never queue in front of it.
+    private val urgentPool: ExecutorService = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, object : LinkedBlockingDeque<Runnable>() {
+        override fun offer(e: Runnable): Boolean = offerFirst(e)
+    }, threads("img-urgent", Process.THREAD_PRIORITY_DISPLAY)).apply { allowCoreThreadTimeOut(true) }
     private val originalPool: ExecutorService = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, LinkedBlockingDeque(),
         threads("img-full", Process.THREAD_PRIORITY_DEFAULT)).apply { allowCoreThreadTimeOut(true) }
     private val prefetchPool: ExecutorService = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, LinkedBlockingDeque(),
@@ -103,7 +108,7 @@ object Img {
     fun cached(url: String, spec: Spec): Bitmap? = if (::mem.isInitialized) mem.get(spec.key(url)) else null
 
     /** Loads [url] at [spec] for something on screen; [cb] runs on the main thread (null on failure). */
-    fun load(url: String, spec: Spec, cb: (Bitmap?) -> Unit) = request(url, spec, visible = true, cb = cb)
+    fun load(url: String, spec: Spec, urgent: Boolean = false, cb: (Bitmap?) -> Unit) = request(url, spec, visible = true, urgent = urgent, cb = cb)
 
     /** Warms the memory cache for something about to be shown, at background priority. */
     fun prefetch(url: String?, spec: Spec) {
@@ -117,7 +122,7 @@ object Img {
         prefetchPool.execute { try { ensureOnDisk(url, original) } catch (_: Throwable) {} }
     }
 
-    private fun request(url: String, spec: Spec, visible: Boolean, cb: (Bitmap?) -> Unit) {
+    private fun request(url: String, spec: Spec, visible: Boolean, urgent: Boolean = false, cb: (Bitmap?) -> Unit) {
         val key = spec.key(url)
         mem.get(key)?.let { cb(it); return }
         val failed = failedAt[key]
@@ -126,15 +131,16 @@ object Img {
         if (p != null) {
             p.callbacks.add(cb)
             // Something on screen now wants what was only being prefetched: do it properly too.
-            if (visible && !p.visible) { p.visible = true; submit(url, spec, key, visible = true) }
+            if ((visible && !p.visible) || urgent) { p.visible = true; submit(url, spec, key, visible = true, urgent = urgent) }
             return
         }
         waiting[key] = Pending(mutableListOf(cb), visible)
-        submit(url, spec, key, visible)
+        submit(url, spec, key, visible, urgent)
     }
 
-    private fun submit(url: String, spec: Spec, key: String, visible: Boolean) {
+    private fun submit(url: String, spec: Spec, key: String, visible: Boolean, urgent: Boolean = false) {
         val pool = when {
+            urgent -> urgentPool
             !visible -> prefetchPool
             spec.original -> originalPool
             else -> visiblePool
@@ -158,7 +164,7 @@ object Img {
      * the bitmap fades in when it arrives, unless the view was re-bound in the meantime. [onDone]
      * always gets the bitmap the view shows (also when it was already showing it), or null.
      */
-    fun into(iv: ImageView, url: String?, spec: Spec, fade: Boolean = true, onDone: ((Bitmap?) -> Unit)? = null) {
+    fun into(iv: ImageView, url: String?, spec: Spec, fade: Boolean = true, urgent: Boolean = false, onDone: ((Bitmap?) -> Unit)? = null) {
         if (url == null) {
             iv.setTag(R.id.img_key, null)
             iv.setImageDrawable(null)
@@ -180,7 +186,7 @@ object Img {
             return
         }
         iv.setImageDrawable(null)
-        load(url, spec) { bmp ->
+        load(url, spec, urgent) { bmp ->
             if (iv.getTag(R.id.img_key) != key) return@load
             if (bmp != null) {
                 iv.setImageBitmap(bmp)

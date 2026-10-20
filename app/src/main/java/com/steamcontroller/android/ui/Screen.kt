@@ -43,6 +43,8 @@ object Screen {
         col.addView(head, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(48)).apply { gravity = Gravity.CENTER_VERTICAL })
         col.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = ctx.dp(12) })
         root.addView(col)
+        // Focus growth and glow must not be cut off at container edges.
+        root.viewTreeObserver.addOnGlobalLayoutListener { Unclip.apply(content) }
         return root
     }
 }

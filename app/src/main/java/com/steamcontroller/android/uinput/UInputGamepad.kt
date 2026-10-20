@@ -36,6 +36,10 @@ class UInputGamepad(
     private val TAG = "UInputGamepad"
 
     companion object {
+        /** The bound instance, for the self-updater's one install command (hub/Updater). */
+        @Volatile var active: UInputGamepad? = null
+            private set
+
         // Sentinel meaning "the setting had no value before we touched it" (settings get
         // returns "null" as a string in that case) - restored by deleting the key, not by
         // writing the literal string "null".
@@ -97,6 +101,16 @@ class UInputGamepad(
 
     @Volatile var rumbleSupported: Boolean = false
         private set
+
+    /**
+     * Runs `pm install -r -t <apk>` through the shell-uid service (ShellAllowlist checks the exact
+     * shape and path). Blocks for up to four minutes: call off the main thread. -2 when the shell
+     * service is not connected, -1 on refusal or failure, else the exit code.
+     */
+    fun runInstall(apkPath: String): Int {
+        val svc = service ?: return -2
+        return try { svc.runShellCommand(arrayOf("pm", "install", "-r", "-t", apkPath)) } catch (_: Throwable) { -1 }
+    }
 
     /** Set by ControllerService to receive rumble commands from games. (strong, weak) ∈ [0, 65535]. */
     var onRumble: ((strong: Int, weak: Int) -> Unit)? = null
@@ -325,11 +339,13 @@ class UInputGamepad(
         if (bound) return
         Shizuku.bindUserService(args, connection)
         bound = true
+        active = this
         startRumbleThread()
     }
 
     fun unbind() {
         if (!bound) return
+        if (active === this) active = null
         stopRumbleThread()
         try {
             service?.let { restoreShowImeOverride(it) }

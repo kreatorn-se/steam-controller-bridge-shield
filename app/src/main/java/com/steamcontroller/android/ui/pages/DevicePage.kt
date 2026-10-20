@@ -57,6 +57,8 @@ class DevicePage(host: Host) : Page(host) {
     private var slowAt = 0L
     private lateinit var reconnectBtn: TextView
 
+    // Declared before view: build() sets it.
+    private var updateRow: ActionRow? = null
     override val view: View = build()
     override val defaultFocus: View get() = reconnectBtn
 
@@ -156,6 +158,20 @@ class DevicePage(host: Host) : Page(host) {
         add(right, ActionRow(ctx, ctx.getString(R.string.dev_debug), ctx.getString(R.string.dev_debug_hint)) {
             ctx.startActivity(Intent(ctx, DebugActivity::class.java))
         })
+        add(right, ToggleRow(ctx, ctx.getString(R.string.dev_diag_upload), ctx.getString(R.string.dev_diag_upload_hint),
+            { com.steamcontroller.android.hub.Diag.enabled(ctx) }, { com.steamcontroller.android.hub.Diag.setEnabled(ctx, it) }))
+        // Self-update: state from update/Updater; one press downloads and installs.
+        updateRow = ActionRow(ctx, ctx.getString(R.string.dev_update), ctx.getString(R.string.dev_update_hint), "") {
+            val u = com.steamcontroller.android.update.Updater
+            when (val st = u.state) {
+                is com.steamcontroller.android.update.Updater.State.Available -> u.install(ctx, st.rel)
+                is com.steamcontroller.android.update.Updater.State.Failed -> st.rel?.let { u.install(ctx, it) } ?: u.checkIfDue(ctx, force = true)
+                is com.steamcontroller.android.update.Updater.State.Idle -> { u.checkIfDue(ctx, force = true); Pill.show(ctx, Pill.Kind.INFO, ctx.getString(R.string.update_checking)) }
+                else -> {}
+            }
+        }
+        add(right, updateRow!!)
+        com.steamcontroller.android.update.Updater.observe { st -> renderUpdate(st) }
         add(right, ActionRow(ctx, ctx.getString(R.string.dev_about), "Gamehub ${BuildConfig.VERSION_NAME} · controller bridge", ctx.getString(R.string.dev_source)) {
             try {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB)))
@@ -192,6 +208,18 @@ class DevicePage(host: Host) : Page(host) {
     }
 
     private fun add(parent: LinearLayout, r: SettingRow) { rows += r; parent.addView(r) }
+
+    private fun renderUpdate(st: com.steamcontroller.android.update.Updater.State) {
+        val row = updateRow ?: return
+        row.valueView.text = when (st) {
+            is com.steamcontroller.android.update.Updater.State.Idle -> ctx.getString(R.string.update_up_to_date, BuildConfig.VERSION_NAME)
+            is com.steamcontroller.android.update.Updater.State.Available -> ctx.getString(R.string.update_available, st.rel.version)
+            is com.steamcontroller.android.update.Updater.State.Downloading -> ctx.getString(R.string.update_downloading, (st.progress * 100).toInt())
+            is com.steamcontroller.android.update.Updater.State.Installing -> ctx.getString(R.string.update_installing)
+            is com.steamcontroller.android.update.Updater.State.Failed -> (ctx as? com.steamcontroller.android.MainActivity)?.updateFailure(st.message) ?: ctx.getString(R.string.update_retry)
+        }
+        row.valueView.setTextColor(if (st is com.steamcontroller.android.update.Updater.State.Idle) C.text2 else C.accent)
+    }
 
     override fun refresh() {
         for (r in rows) r.refresh()

@@ -145,7 +145,7 @@
     <!-- ━━━━━━━━━━━━ Profiles ━━━━━━━━━━━━ -->
     <string name="profiles_empty_title">No profiles yet</string>
     <string name="profiles_active_badge">Active</string>
-    <string name="prof_empty_body">Tune the controller for a game, then save it here as a profile. Bind a profile to apps and it switches by itself when you launch them.</string>
+    <string name="prof_empty_body">Tune the controller for a game, then save it here as a profile. Switch with Steam + D-pad left or right.</string>
     <string name="prof_new">New from current</string>
     <string name="prof_new_title">Save current settings as a profile</string>
     <string name="prof_save">Save</string>
@@ -161,7 +161,8 @@
     <string name="prof_reapply">Apply again</string>
     <string name="prof_apply_hint">Loads its mappings, curves and gyro now</string>
     <string name="prof_update">Update from current settings</string>
-    <string name="prof_update_hint">Overwrites it with what is live now; app bindings stay</string>
+    <string name="prof_update_hint">Overwrites it with what is live now</string>
+    <string name="prof_now_playing_note">Bind a profile to Steam games and it switches by itself while one of them runs (Steam\'s Now playing, through Gamehub).</string>
     <string name="prof_updated">Updated · %1$s</string>
     <string name="prof_bind">Bind to apps…</string>
     <string name="prof_rename">Rename</string>
@@ -335,7 +336,6 @@
     <!-- ━━━━━━━━━━━━ Gamehub on the TV: shell ━━━━━━━━━━━━ -->
     <string name="nav_settings">Settings</string>
     <string name="strip_now_playing">Now playing · %1$s</string>
-    <string name="dream_label">Gamehub</string>
 
     <!-- ━━━━━━━━━━━━ Home ━━━━━━━━━━━━ -->
     <string name="tv_play_show">Play slideshow</string>
@@ -418,4 +418,97 @@
     <string name="lib_favourites">Favourites</string>
     <string name="lib_empty">Nothing here yet.</string>
     <string name="lib_update">Gamehub needs an update before the library can be shown on the TV.</string>
+
+    <!-- ━━━━━━━━━━━━ 1.4.1: hold menu ━━━━━━━━━━━━ -->
+    <string name="hold_favourite">Favourite</string>
+    <string name="hold_unfavourite">Unfavourite</string>
+    <string name="hold_album">Add to album…</string>
+    <string name="hold_album_new">New album</string>
+    <string name="hold_album_done">Added to %1$s</string>
+    <string name="hold_people">Tag people…</string>
+    <string name="hold_people_new">New person</string>
+    <string name="hold_background">Use as this game\'s background</string>
+    <string name="hold_background_done">Background · %1$s</string>
+    <string name="hold_slideshow">Start slideshow from here</string>
+    <string name="hold_session">Show this session</string>
+    <string name="hold_session_title">Session</string>
+    <string name="hold_hub">Open game hub</string>
+    <string name="hold_info">Info</string>
+    <string name="hold_info_date">Taken</string>
+    <string name="hold_info_game">Game</string>
+    <string name="hold_info_source">Source</string>
+    <string name="hold_info_size">Resolution</string>
+    <string name="hold_info_people">People</string>
+    <string name="hold_info_note">Note</string>
+    <string name="hold_hide">Hide</string>
+    <string name="hold_hidden">Hidden</string>
+    <string name="hold_undo">Undo</string>
+    <string name="hold_fav_done">Favourite</string>
+    <string name="hold_unfav_done">Not a favourite</string>
+    <string name="hold_failed">Not saved · try again</string>
+    <string name="hold_needs_update">Update Gamehub for this</string>
+    <string name="hold_recent">Recent</string>
+    <string name="hold_source_friend">A friend</string>
+
+    <!-- ━━━━━━━━━━━━ 1.4.1: game hub ━━━━━━━━━━━━ -->
+    <string name="hub_eyebrow">Game</string>
+    <plurals name="hub_sessions">
+        <item quantity="one">%1$d session</item>
+        <item quantity="other">%1$d sessions</item>
+    </plurals>
+    <string name="hub_since">since %1$d</string>
+    <string name="hub_playtime">Playtime</string>
+    <string name="hub_last2w">Last 2 weeks</string>
+    <string name="hub_last_played">Last played</string>
+    <string name="hub_sessions_label">Sessions</string>
+    <string name="hub_captures">Captures</string>
+    <string name="hub_favourites">Favourites</string>
+    <string name="hub_achievements">Achievements</string>
+    <string name="hub_rarest">Rarest</string>
+    <string name="hub_recent">Latest</string>
+    <string name="hub_today">Today</string>
+    <string name="hub_yesterday">Yesterday</string>
+    <string name="hub_days_ago">%1$d days ago</string>
+    <string name="hub_all">All</string>
+    <string name="hub_fav_filter">Favourites</string>
+    <string name="hub_session_filter">Session</string>
+    <string name="hub_year_filter">Year</string>
+    <string name="hub_source_filter">Source</string>
+    <string name="hub_all_sessions">All sessions</string>
+    <string name="hub_all_years">All years</string>
+    <string name="hub_all_sources">All sources</string>
+    <string name="hub_no_captures">No captures match.</string>
+    <string name="lib_sort">Sort</string>
+    <string name="lib_sort_recent">Recent</string>
+    <string name="lib_sort_captures">Captures</string>
+    <string name="lib_sort_playtime">Playtime</string>
+    <string name="lib_sort_name">Name</string>
+
+    <!-- ━━━━━━━━━━━━ 1.4.1: Steam profiles, update, diagnostics ━━━━━━━━━━━━ -->
+    <string name="steam_bind">Bind to Steam game…</string>
+    <string name="steam_bind_none_yet">Switch to this profile while a chosen game runs</string>
+    <plurals name="steam_games">
+        <item quantity="one">Follows %1$d Steam game</item>
+        <item quantity="other">Follows %1$d Steam games</item>
+    </plurals>
+    <string name="steam_bind_eyebrow">Steam games</string>
+    <string name="steam_bind_hint">This profile is applied while any of these runs, and the one before comes back after.</string>
+    <string name="steam_bind_search">Search your Steam library</string>
+    <string name="steam_bind_none">No games found.</string>
+    <string name="steam_bind_update">Gamehub needs an update to list Steam games.</string>
+    <string name="steam_bind_offline">Gamehub cannot be reached.</string>
+    <string name="update_available">Update · %1$s</string>
+    <string name="update_downloading">Downloading %1$d %%</string>
+    <string name="update_installing">Installing…</string>
+    <string name="update_retry">Update · try again</string>
+    <string name="update_up_to_date">Up to date · %1$s</string>
+    <string name="update_checking">Checking for updates</string>
+    <string name="update_needs_service">Start the controller service first: it installs the update</string>
+    <string name="update_checksum">Download damaged · not installed</string>
+    <string name="update_download_failed">Download failed · try again</string>
+    <string name="update_install_failed">Android refused the update (a build signed with another key?) · install it from the PC once</string>
+    <string name="dev_update">App update</string>
+    <string name="dev_update_hint">From GitHub releases, installed through Shizuku</string>
+    <string name="dev_diag_upload">Send diagnostics to Gamehub</string>
+    <string name="dev_diag_upload_hint">Events, timings and crash reports; never the token or your text</string>
 </resources>

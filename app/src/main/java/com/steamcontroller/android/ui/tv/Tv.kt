@@ -69,6 +69,10 @@ data class ShowRequest(
     /** Already-loaded captures of siblings[index], so the first image appears at once. */
     val preload: List<Shot>? = null,
     val preloadNext: String? = null,
+    /** The in-app screensaver: no caption or HUD, slow crossfades, any key exits. */
+    val calm: Boolean = false,
+    val intervalSec: Int? = null,
+    val shuffle: Boolean = false,
 )
 
 /** Gamepad and remote keys, as the virtual Xbox pad and the Shield remote send them. */
@@ -91,3 +95,23 @@ object Keys {
 fun Context.px(dp: Int): Int = (dp * resources.displayMetrics.density + 0.5f).toInt()
 
 fun GamehubTv.Shot.gameOrUnknown(): String = game ?: "Unsorted"
+
+/**
+ * Timings of the home's first load, from process start, in the Diagnostics history (and logcat
+ * as GamehubTV) so they can be measured on the Shield: cold start → cache read → first render →
+ * /home answered (network and parse) → hero image → first row images. Each phase once per process.
+ */
+object HomeTiming {
+    private val seen = HashSet<String>()
+    private val t0: Long = try { android.os.Process.getStartElapsedRealtime() } catch (_: Throwable) { android.os.SystemClock.elapsedRealtime() }
+
+    @Synchronized
+    fun mark(phase: String, detail: String = "") {
+        if (!seen.add(phase)) return
+        val ms = android.os.SystemClock.elapsedRealtime() - t0
+        val line = "home $phase +${ms}ms" + (if (detail.isNotEmpty()) " $detail" else "")
+        android.util.Log.i("GamehubTV", line)
+        com.steamcontroller.android.service.Diagnostics.record("tv", line)
+        com.steamcontroller.android.hub.Diag.note(line)
+    }
+}

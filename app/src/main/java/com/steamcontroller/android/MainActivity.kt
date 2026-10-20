@@ -19,6 +19,11 @@ import com.steamcontroller.android.backup.BackupManager
 import com.steamcontroller.android.ui.pill.Pill
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import com.steamcontroller.android.hub.GamehubTv
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.steamcontroller.android.hub.CaptureStore
 import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.live.ControllerLive
@@ -29,6 +34,7 @@ import com.steamcontroller.android.ui.Page
 import com.steamcontroller.android.ui.PageId
 import com.steamcontroller.android.ui.ServiceControl
 import com.steamcontroller.android.ui.Sheet
+import com.steamcontroller.android.ui.Unclip
 import com.steamcontroller.android.ui.Backdrop
 import com.steamcontroller.android.ui.live.LiveFrame
 import com.steamcontroller.android.ui.live.LiveTicker
@@ -45,6 +51,9 @@ import com.steamcontroller.android.ui.theme.surface
 import com.steamcontroller.android.ui.widget.Anim
 import com.steamcontroller.android.ui.widget.DotView
 import com.steamcontroller.android.ui.widget.Kit
+import com.steamcontroller.android.ui.tv.GameHub
+import com.steamcontroller.android.ui.tv.Hold
+import com.steamcontroller.android.ui.tv.HoldItem
 import com.steamcontroller.android.ui.tv.HomePage
 import com.steamcontroller.android.ui.tv.HomeRepo
 import com.steamcontroller.android.ui.tv.Img
@@ -64,6 +73,11 @@ import com.steamcontroller.android.ui.tv.Splash
  */
 class MainActivity : AppCompatActivity(), Host {
 
+    // The UI at 85 % on a TV (ui/tv/TvScale).
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.steamcontroller.android.ui.tv.TvScale.wrap(newBase))
+    }
+
     override val activity: AppCompatActivity get() = this
     private lateinit var svc: ServiceControl
     override val service: ServiceControl get() = svc
@@ -77,6 +91,11 @@ class MainActivity : AppCompatActivity(), Host {
     private lateinit var pageFrame: FocusMemoryFrame
     private lateinit var overlay: FrameLayout
     private lateinit var showLayer: FrameLayout
+    private lateinit var hubLayer: FrameLayout
+    private lateinit var holdLayer: FrameLayout
+    private lateinit var hold: Hold
+    private var gameHub: GameHub? = null
+    private var focusBeforeHub: View? = null
     private lateinit var strip: View
     private lateinit var title: TextView
     private var sheet: Sheet? = null
@@ -90,6 +109,9 @@ class MainActivity : AppCompatActivity(), Host {
     private lateinit var serviceChip: StripChip
     private lateinit var hubChip: StripChip
     private lateinit var nowChip: StripChip
+    private lateinit var updateChip: StripChip
+    private val updateBar by lazy { com.steamcontroller.android.ui.tv.Bar(this) }
+    private val updateListener: (com.steamcontroller.android.update.Updater.State) -> Unit = { renderUpdate(it) }
     private var nowGame: String? = null
     private val homeListener: (HomeRepo.State) -> Unit = { renderNow(it) }
     private var statusSeen = -1
@@ -105,7 +127,41 @@ class MainActivity : AppCompatActivity(), Host {
     private var hatY = 0f
     private var stickLeaked = false
 
+    // ── in-app screensaver ───────────────────────────────────────────────────────────
+    // After five minutes without input, a calm slideshow of the hub's screensaver collection.
+    // Any key returns to where you were. Outside the app the Shield's own screensaver runs.
+
+    private val idleHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lastInput = android.os.SystemClock.uptimeMillis()
+    private val idleCheck = object : Runnable {
+        override fun run() {
+            checkIdle()
+            idleHandler.postDelayed(this, 20_000L)
+        }
+    }
+
+    private fun checkIdle() {
+        val idle = android.os.SystemClock.uptimeMillis() - lastInput
+        if (!resumed || idle < IDLE_MS || show != null || sheet != null || hold.menuOpen || !GamehubStore.isLinked(this)) return
+        lastInput = android.os.SystemClock.uptimeMillis() // one attempt per idle period
+        lifecycleScope.launch {
+            val cfg = withContext(Dispatchers.IO) {
+                GamehubTv.screensaver(this@MainActivity).valueOrNull() ?: GamehubTv.cachedSaver(this@MainActivity) ?: GamehubTv.Saver("favourites", 20, true)
+            }
+            if (!resumed || show != null || sheet != null || hold.menuOpen) return@launch
+            openShow(ShowRequest(listOf(CollRef(cfg.collection, "")), 0, calm = true, intervalSec = cfg.intervalSec, shuffle = cfg.shuffle))
+        }
+    }
+
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) {
+            // Only deliberate movement counts as activity, not sensor noise from an idle pad.
+            if (kotlin.math.abs(ev.getAxisValue(MotionEvent.AXIS_X)) > 0.4f || kotlin.math.abs(ev.getAxisValue(MotionEvent.AXIS_Y)) > 0.4f ||
+                ev.getAxisValue(MotionEvent.AXIS_HAT_X) != 0f || ev.getAxisValue(MotionEvent.AXIS_HAT_Y) != 0f ||
+                ev.getAxisValue(MotionEvent.AXIS_LTRIGGER) > 0.4f || ev.getAxisValue(MotionEvent.AXIS_RTRIGGER) > 0.4f) {
+                lastInput = android.os.SystemClock.uptimeMillis()
+            }
+        }
         // Show mode reads the triggers (LT/RT: previous/next collection); nothing else changes.
         if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) show?.onMotion(ev)
         if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) && ev.actionMasked == MotionEvent.ACTION_MOVE) {
@@ -126,6 +182,7 @@ class MainActivity : AppCompatActivity(), Host {
         // The manifest starts us on the launch theme (its window background is the splash mark).
         setTheme(R.style.Theme_SteamController)
         super.onCreate(savedInstanceState)
+        com.steamcontroller.android.ui.tv.HomeTiming.mark("activity-create")
         WindowCompat.setDecorFitsSystemWindows(window, true)
         Img.init(this)
         HomeRepo.install()
@@ -140,6 +197,9 @@ class MainActivity : AppCompatActivity(), Host {
         val start = savedInstanceState?.getString(KEY_PAGE)?.let { runCatching { PageId.valueOf(it) }.getOrNull() } ?: PageId.HOME
         go(start)
         HomeRepo.observe(this, homeListener)
+        com.steamcontroller.android.hub.Background.start(this, "app")
+        com.steamcontroller.android.update.Updater.observe(updateListener)
+        com.steamcontroller.android.update.Updater.checkIfDue(this)
         if (savedInstanceState == null) Splash.play(rootView)
         service.handleIntent(intent)
     }
@@ -162,9 +222,13 @@ class MainActivity : AppCompatActivity(), Host {
         pages[current]?.let { it.refresh(); it.onShow() }
         statusSeen = -1
         HomeRepo.start(this)
+        lastInput = android.os.SystemClock.uptimeMillis()
+        idleHandler.removeCallbacks(idleCheck)
+        idleHandler.postDelayed(idleCheck, 20_000L)
     }
 
     override fun onPause() {
+        idleHandler.removeCallbacks(idleCheck)
         HomeRepo.stop()
         show?.pause()
         pages[current]?.onHide()
@@ -182,6 +246,7 @@ class MainActivity : AppCompatActivity(), Host {
         if (stopped) {
             stopped = false
             pages[current]?.restoreImages()
+            gameHub?.restoreImages()
             show?.restoreImages()
         }
     }
@@ -191,6 +256,7 @@ class MainActivity : AppCompatActivity(), Host {
     override fun onStop() {
         stopped = true
         for (p in pages.values) p.releaseImages()
+        gameHub?.releaseImages()
         show?.releaseImages()
         Img.setVisible(false)
         super.onStop()
@@ -203,6 +269,8 @@ class MainActivity : AppCompatActivity(), Host {
 
     override fun onDestroy() {
         HomeRepo.remove(homeListener)
+        com.steamcontroller.android.update.Updater.remove(updateListener)
+        com.steamcontroller.android.hub.Background.stop("app")
         service.unregister()
         super.onDestroy()
     }
@@ -229,9 +297,12 @@ class MainActivity : AppCompatActivity(), Host {
         pageFrame = FocusMemoryFrame(this).apply { clipChildren = false; clipToPadding = false }
         pageFrame.fallback = { pages[cur]?.defaultFocus }
         root.addView(pageFrame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // A game's hub sits over the page, under the rail and the strip.
+        hubLayer = FrameLayout(this)
+        root.addView(hubLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
-        rail = NavRail(this, onSelect = { id, focusContent -> go(id, focusContent) }, onRight = { focusPage() })
-        rail.attachPanel(root, safeH, 1)
+        rail = NavRail(this, onSelect = { id, focusContent -> go(id, focusContent) }, onRight = { focusContent() })
+        rail.attachPanel(root, safeH, 2)
 
         strip = buildStrip()
         root.addView(strip, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, stripH, Gravity.TOP).apply {
@@ -246,7 +317,17 @@ class MainActivity : AppCompatActivity(), Host {
         root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         showLayer = FrameLayout(this)
         root.addView(showLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // The hold ring, the hold menu and its undo bar: above everything, show mode included.
+        holdLayer = FrameLayout(this)
+        root.addView(holdLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        hold = Hold(this, holdLayer)
         setContentView(root)
+        // Settings pages and sheets: focused controls grow and glow past container edges, so no
+        // container may clip them (ui/Unclip). Re-applied as pages rebuild their content.
+        root.viewTreeObserver.addOnGlobalLayoutListener {
+            if (cur.settings) pages[cur]?.view?.let { Unclip.apply(it) }
+            sheet?.let { Unclip.apply(it.root) }
+        }
     }
 
     private fun pageParams(p: Page): FrameLayout.LayoutParams {
@@ -278,7 +359,15 @@ class MainActivity : AppCompatActivity(), Host {
             c.visibility = View.GONE
             c.setOnClickListener { nowGame?.let { g -> openShow(ShowRequest(listOf(CollRef("game:$g", g)), 0)) } }
         }
-        for (c in listOf(nowChip, linkChip, profileChip, serviceChip, hubChip)) chips.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
+        updateChip = StripChip(true).also { c ->
+            c.dot.color = C.accent
+            c.dot.halo = true
+            c.visibility = View.GONE
+            c.addView(updateBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(10) })
+            updateBar.visibility = View.GONE
+            c.setOnClickListener { startUpdate() }
+        }
+        for (c in listOf(updateChip, nowChip, linkChip, profileChip, serviceChip, hubChip)) chips.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
         val scroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
@@ -328,6 +417,49 @@ class MainActivity : AppCompatActivity(), Host {
         serviceChip.label.text = getString(if (f.serviceRunning) R.string.strip_stop_service else R.string.strip_start_service)
         serviceChip.dot.color = if (f.serviceRunning) C.success else C.text3
         serviceChip.primary(!f.serviceRunning)
+    }
+
+    // ── self-update ──────────────────────────────────────────────────────────────────
+
+    private fun startUpdate() {
+        val u = com.steamcontroller.android.update.Updater
+        when (val st = u.state) {
+            is com.steamcontroller.android.update.Updater.State.Available -> u.install(this, st.rel)
+            is com.steamcontroller.android.update.Updater.State.Failed -> st.rel?.let { u.install(this, it) }
+            else -> {}
+        }
+    }
+
+    private fun renderUpdate(st: com.steamcontroller.android.update.Updater.State) {
+        when (st) {
+            is com.steamcontroller.android.update.Updater.State.Idle -> { updateChip.visibility = View.GONE; return }
+            is com.steamcontroller.android.update.Updater.State.Available -> {
+                updateChip.label.text = getString(R.string.update_available, st.rel.version)
+                updateBar.visibility = View.GONE
+            }
+            is com.steamcontroller.android.update.Updater.State.Downloading -> {
+                updateChip.label.text = getString(R.string.update_downloading, (st.progress * 100).toInt())
+                updateBar.visibility = View.VISIBLE
+                updateBar.value = st.progress
+            }
+            is com.steamcontroller.android.update.Updater.State.Installing -> {
+                updateChip.label.text = getString(R.string.update_installing)
+                updateBar.visibility = View.GONE
+            }
+            is com.steamcontroller.android.update.Updater.State.Failed -> {
+                updateChip.label.text = getString(R.string.update_retry)
+                updateBar.visibility = View.GONE
+                Pill.show(this, Pill.Kind.FAILED, updateFailure(st.message))
+            }
+        }
+        updateChip.visibility = View.VISIBLE
+    }
+
+    fun updateFailure(why: String): String = when {
+        why == "needs_service" -> getString(R.string.update_needs_service)
+        why == "checksum" -> getString(R.string.update_checksum)
+        why.startsWith("install") -> getString(R.string.update_install_failed)
+        else -> getString(R.string.update_download_failed)
     }
 
     /** The compact Now-playing chip: Steam presence via the hub's home. */
@@ -391,6 +523,7 @@ class MainActivity : AppCompatActivity(), Host {
     }
 
     override fun go(id: PageId, focusContent: Boolean) {
+        gameHub?.close()
         val switching = id != current || pageFrame.childCount == 0
         if (switching) {
             pages[current]?.let { old -> if (pageFrame.childCount > 0) { if (resumed) old.onHide(); pageFrame.removeView(old.view) } }
@@ -398,7 +531,7 @@ class MainActivity : AppCompatActivity(), Host {
             val p = page(id)
             (p.view.parent as? ViewGroup)?.removeView(p.view)
             pageFrame.remembered = null
-            pageFrame.addView(p.view, pageParams(p))
+            pageFrame.addView(p.view, Unclip.keep(p.view, pageParams(p)))
             Anim.fadeIn(p.view)
             title.text = if (id == PageId.HOME) "" else id.title
             rail.setCurrent(id)
@@ -411,6 +544,42 @@ class MainActivity : AppCompatActivity(), Host {
 
     private fun focusPage() {
         if (!pageFrame.requestFocus(View.FOCUS_RIGHT)) rail.focusCurrent()
+    }
+
+    /** Right from the rail: into the game hub when one is open, else the page. */
+    private fun focusContent() {
+        val h = gameHub
+        if (h != null && h.root.requestFocus(View.FOCUS_RIGHT)) return
+        focusPage()
+    }
+
+    // ── game hubs ─────────────────────────────────────────────────────────────────────
+
+    override fun openGame(name: String) {
+        show?.close()
+        gameHub?.close()
+        focusBeforeHub = currentFocus
+        val h = GameHub(this, name) { onHubClosed() }
+        gameHub = h
+        hubLayer.addView(h.root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        pageFrame.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        title.text = ""
+        h.start()
+    }
+
+    private fun onHubClosed() {
+        gameHub = null
+        if (sheet == null && show == null) pageFrame.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        title.text = if (cur == PageId.HOME) "" else cur.title
+        val b = focusBeforeHub
+        focusBeforeHub = null
+        if (b != null && b.isAttachedToWindow && b.isShown) b.requestFocus() else focusPage()
+    }
+
+    override fun contentChanged(item: HoldItem?, hidden: Boolean) {
+        HomeRepo.refresh(this, 0L)
+        pages[cur]?.refresh()
+        if (item != null) gameHub?.changed(item, hidden)
     }
 
     private var focusBeforeSheet: View? = null
@@ -441,7 +610,9 @@ class MainActivity : AppCompatActivity(), Host {
 
     private fun setContentFocusBlocked(blocked: Boolean) {
         val mode = if (blocked) ViewGroup.FOCUS_BLOCK_DESCENDANTS else ViewGroup.FOCUS_AFTER_DESCENDANTS
-        pageFrame.descendantFocusability = mode
+        // The page stays blocked under an open game hub.
+        pageFrame.descendantFocusability = if (gameHub != null) ViewGroup.FOCUS_BLOCK_DESCENDANTS else mode
+        hubLayer.descendantFocusability = mode
         (strip as ViewGroup).descendantFocusability = mode
         rail.descendantFocusability = mode
     }
@@ -454,7 +625,8 @@ class MainActivity : AppCompatActivity(), Host {
         if (req.siblings.isEmpty() || show != null) return
         if (sheet != null) closeSheet(immediate = true)
         focusBeforeShow = currentFocus
-        val s = ShowMode(this, req) { onShowClosed() }
+        hold.cancel()
+        val s = ShowMode(this, req, hold, onOpenGame = { openGame(it) }, onChanged = { item, hidden -> contentChanged(item, hidden) }) { onShowClosed() }
         show = s
         showLayer.addView(s.root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentFocusBlocked(true)
@@ -466,7 +638,8 @@ class MainActivity : AppCompatActivity(), Host {
         setContentFocusBlocked(false)
         val back = focusBeforeShow
         focusBeforeShow = null
-        if (pages[current]?.restoreFocus() != true) {
+        val restored = gameHub == null && pages[current]?.restoreFocus() == true
+        if (!restored) {
             if (back != null && back.isAttachedToWindow && back.isShown) back.requestFocus() else focusPage()
         }
         // Favourites may have changed in show mode; Home updates in place.
@@ -519,8 +692,10 @@ class MainActivity : AppCompatActivity(), Host {
 
     /** Back: overlays first (show mode, a sheet), then the page, then the rail, then Home, then out. */
     private fun back() {
+        if (hold.menuOpen) { hold.close(); return }
         show?.let { it.close(); return }
         if (sheet != null) { closeSheet(); return }
+        gameHub?.let { h -> if (!h.onBack()) h.close(); return }
         val p = pages[current]
         if (p != null && p.onBack()) return
         if (pageFrame.hasFocus() || strip.hasFocus()) { rail.focusCurrent(); return }
@@ -529,7 +704,16 @@ class MainActivity : AppCompatActivity(), Host {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        lastInput = android.os.SystemClock.uptimeMillis()
+        // The hold menu owns the keys while open (its rows use normal focus).
+        if (hold.menuOpen) {
+            if (hold.menuKey(event)) return true
+            return super.dispatchKeyEvent(event)
+        }
+        if (hold.undoKey(event)) return true
         show?.let { if (it.onKey(event)) return true }
+        // Holding OK on a picture: the ring, then the menu. A tap passes through untouched.
+        if (sheet == null && hold.pageKey(event)) return true
         val s = sheet
         if (s != null) {
             if (s.onKey?.invoke(event) == true) return true
@@ -541,5 +725,6 @@ class MainActivity : AppCompatActivity(), Host {
 
     private companion object {
         const val KEY_PAGE = "page"
+        const val IDLE_MS = 5 * 60_000L
     }
 }

@@ -38,7 +38,7 @@ object GamehubTv {
         @Volatile var favorite: Boolean,
         val source: String?,
         @Volatile var status: String?,
-        val people: List<String>,
+        @Volatile var people: List<String>,
         val note: String?,
         val previewUrl: String,
         val fullUrl: String,
@@ -58,6 +58,42 @@ object GamehubTv {
         val subtitle: String?,
         /** A person's picture (public Steam CDN URL), when there is one. */
         val avatar: String? = null,
+        /** Games: when last played or captured (epoch ms) and Steam playtime, for sorting. */
+        val last: Long = 0L,
+        val playtimeMin: Int = 0,
+    )
+
+    data class Achievement(val name: String, val icon: String?, val unlockedAt: Long, val rarity: Double?)
+
+    data class SteamStats(
+        val appid: Long,
+        val playtimeMin: Int,
+        val last2wMin: Int,
+        val lastPlayed: Long,
+        val achUnlocked: Int,
+        val achTotal: Int,
+        val recent: List<Achievement>,
+        val rarest: List<Achievement>,
+    )
+
+    data class SessionInfo(val key: String, val start: Long, val end: Long, val count: Int)
+
+    /** Everything the game hub shows above its captures (GET games/<name>/hub). */
+    data class GameHub(
+        val game: String,
+        val art: Art?,
+        /** The header picture: official hero art by default, or a capture Kent chose. */
+        val backgroundUrl: String?,
+        val backgroundShotId: String?,
+        val captures: Int,
+        val favourites: Int,
+        val sessions: Int,
+        val firstAt: Long,
+        val lastAt: Long,
+        val steam: SteamStats?,
+        val years: List<Int>,
+        val sources: List<String>,
+        val sessionList: List<SessionInfo>,
     )
 
     data class Row(
@@ -94,10 +130,16 @@ object GamehubTv {
 
     // ── endpoints ─────────────────────────────────────────────────────────────────────
 
+    /** Network vs parse time of the last [home] call, for the home timing log. */
+    @Volatile var lastHomeTiming = ""
+
     fun home(c: Context): Res<Home> {
+        val t0 = android.os.SystemClock.elapsedRealtime()
         val r = get(c, "/api/device/v1/home")
+        val t1 = android.os.SystemClock.elapsedRealtime()
         if (r is Res.Ok) {
             val home = try { parseHome(JSONObject(r.value)) } catch (e: Exception) { return Res.Err(Fail.SERVER, "bad home: ${e.message}") }
+            lastHomeTiming = "net=${t1 - t0}ms parse=${android.os.SystemClock.elapsedRealtime() - t1}ms bytes=${r.value.length}"
             writeCache(c, "home", r.value)
             return Res.Ok(home)
         }
@@ -106,21 +148,194 @@ object GamehubTv {
 
     fun cachedHome(c: Context): Home? = readCache(c, "home")?.let { runCatching { parseHome(JSONObject(it)) }.getOrNull() }
 
-    fun shots(c: Context, collection: String, before: String? = null, limit: Int = 60): Res<ShotPage> {
+    /** [filters]: optional `fav=1`, `year=`, `source=`, `session=` (game collections). */
+    fun shots(c: Context, collection: String, before: String? = null, limit: Int = 60, filters: Map<String, String> = emptyMap()): Res<ShotPage> {
         val q = StringBuilder("/api/device/v1/shots?c=").append(enc(collection)).append("&limit=").append(limit)
         if (before != null) q.append("&before=").append(enc(before))
+        for ((k, v) in filters.toSortedMap()) q.append('&').append(enc(k)).append('=').append(enc(v))
         val r = get(c, q.toString())
         if (r is Res.Ok) {
             val page = try { parsePage(JSONObject(r.value)) } catch (e: Exception) { return Res.Err(Fail.SERVER, "bad page: ${e.message}") }
-            if (before == null) writeCache(c, "c-" + sha1(collection), r.value)
+            if (before == null) writeCache(c, "c-" + sha1(cacheKey(collection, filters)), r.value)
             return Res.Ok(page)
         }
         return r as Res.Err
     }
 
+    private fun cacheKey(collection: String, filters: Map<String, String>) =
+        if (filters.isEmpty()) collection else collection + "?" + filters.toSortedMap().entries.joinToString("&") { it.key + "=" + it.value }
+
     /** The first page of [collection] as last seen, or null. */
-    fun cachedShots(c: Context, collection: String): ShotPage? =
-        readCache(c, "c-" + sha1(collection))?.let { runCatching { parsePage(JSONObject(it)) }.getOrNull() }
+    fun cachedShots(c: Context, collection: String, filters: Map<String, String> = emptyMap()): ShotPage? =
+        readCache(c, "c-" + sha1(cacheKey(collection, filters)))?.let { runCatching { parsePage(JSONObject(it)) }.getOrNull() }
+
+    // ── game hub and library edits (gamehub branch tv-hub) ────────────────────────────
+
+    private fun seg(s: String) = enc(s)
+
+    fun gameHub(c: Context, game: String): Res<GameHub> {
+        val r = get(c, "/api/device/v1/games/" + seg(game) + "/hub")
+        if (r is Res.Ok) {
+            val h = try { parseGameHub(JSONObject(r.value), game) } catch (e: Exception) { return Res.Err(Fail.SERVER, "bad hub: ${e.message}") }
+            writeCache(c, "h-" + sha1(game), r.value)
+            return Res.Ok(h)
+        }
+        return r as Res.Err
+    }
+
+    fun cachedGameHub(c: Context, game: String): GameHub? =
+        readCache(c, "h-" + sha1(game))?.let { runCatching { parseGameHub(JSONObject(it), game) }.getOrNull() }
+
+    /** Every game, sorted by the hub (recent | captures | playtime | name). */
+    fun gamesSorted(c: Context, sort: String): Res<List<Coll>> {
+        val r = get(c, "/api/device/v1/games?sort=" + enc(sort))
+        if (r is Res.Ok) {
+            val items = try { parseList(r.value, "games") { o -> collOf(o, "game") } } catch (e: Exception) { return Res.Err(Fail.SERVER, "bad games: ${e.message}") }
+            writeCache(c, "l-games-$sort", r.value)
+            return Res.Ok(items)
+        }
+        return r as Res.Err
+    }
+
+    fun cachedGamesSorted(c: Context, sort: String): List<Coll>? =
+        readCache(c, "l-games-$sort")?.let { t -> runCatching { parseList(t, "games") { o -> collOf(o, "game") } }.getOrNull() }
+
+    /** [shotId] null goes back to the official hero art. */
+    fun setBackground(c: Context, game: String, shotId: String?): Res<Unit> {
+        val r = send(c, "POST", "/api/device/v1/games/" + seg(game) + "/background", JSONObject().put("shotId", shotId ?: JSONObject.NULL).toString(), newEndpoint = true)
+        return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
+    }
+
+    /** Returns the new album's id. */
+    fun createAlbum(c: Context, name: String): Res<String> {
+        val r = send(c, "POST", "/api/device/v1/albums", JSONObject().put("name", name).toString(), newEndpoint = true)
+        if (r !is Res.Ok) return r as Res.Err
+        val o = runCatching { JSONObject(r.value) }.getOrNull()
+        val id = o?.let { str(it, "id") ?: it.optJSONObject("album")?.let { a -> str(a, "id") } } ?: return Res.Err(Fail.SERVER, "no album id")
+        return Res.Ok(id)
+    }
+
+    fun addToAlbum(c: Context, albumId: String, shotIds: List<String>): Res<Unit> {
+        val r = send(c, "POST", "/api/device/v1/albums/" + seg(albumId) + "/shots", JSONObject().put("add", JSONArray(shotIds)).toString(), newEndpoint = true)
+        return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
+    }
+
+    fun setPeople(c: Context, shotId: String, add: List<String>, remove: List<String>): Res<Unit> {
+        val body = JSONObject().put("add", JSONArray(add)).put("remove", JSONArray(remove))
+        val r = send(c, "POST", "/api/device/v1/shots/" + seg(shotId) + "/people", body.toString(), newEndpoint = true)
+        return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
+    }
+
+    private fun achievementsOf(a: JSONArray?): List<Achievement> {
+        if (a == null) return emptyList()
+        val out = ArrayList<Achievement>()
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val name = str(o, "name") ?: str(o, "displayName") ?: continue
+            out.add(Achievement(name, str(o, "icon"), msOf(o.optLong("unlockedAt", 0L)), if (o.has("rarity") && !o.isNull("rarity")) o.optDouble("rarity") else null))
+        }
+        return out
+    }
+
+    /** Epoch ms; seconds (as Steam sends them) are accepted too. */
+    private fun msOf(v: Long) = if (v in 1 until 100_000_000_000L) v * 1000L else v
+
+    private fun parseGameHub(o: JSONObject, fallbackName: String): GameHub {
+        val stats = o.optJSONObject("stats")
+        val bg = o.optJSONObject("background")
+        val art = artOf(o.optJSONObject("art"))
+        val steam = o.optJSONObject("steam")?.let { st ->
+            val ach = st.optJSONObject("achievements")
+            SteamStats(
+                appid = st.optLong("appid", 0L),
+                playtimeMin = st.optInt("playtimeMin", 0),
+                last2wMin = st.optInt("last2wMin", 0),
+                lastPlayed = msOf(st.optLong("lastPlayed", 0L)),
+                achUnlocked = ach?.optInt("unlocked", 0) ?: 0,
+                achTotal = ach?.optInt("total", 0) ?: 0,
+                recent = achievementsOf(ach?.optJSONArray("recent")),
+                rarest = achievementsOf(ach?.optJSONArray("rarest")),
+            )
+        }
+        val f = o.optJSONObject("filters")
+        val years = ArrayList<Int>()
+        f?.optJSONArray("years")?.let { a -> for (i in 0 until a.length()) a.optInt(i, 0).takeIf { it > 0 }?.let(years::add) }
+        val sources = ArrayList<String>()
+        f?.optJSONArray("sources")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotBlank() }?.let(sources::add) }
+        val sessions = ArrayList<SessionInfo>()
+        f?.optJSONArray("sessions")?.let { a ->
+            for (i in 0 until a.length()) {
+                val s = a.optJSONObject(i) ?: continue
+                val key = str(s, "key") ?: continue
+                sessions.add(SessionInfo(key, s.optLong("start", 0L), s.optLong("end", 0L), s.optInt("count", 0)))
+            }
+        }
+        return GameHub(
+            game = str(o, "game") ?: fallbackName,
+            art = art,
+            backgroundUrl = bg?.let { str(it, "url") } ?: art?.hero,
+            backgroundShotId = bg?.let { str(it, "shotId") },
+            captures = stats?.optInt("captures", 0) ?: 0,
+            favourites = stats?.optInt("favourites", 0) ?: 0,
+            sessions = stats?.optInt("sessions", sessions.size) ?: sessions.size,
+            firstAt = stats?.optLong("firstAt", 0L) ?: 0L,
+            lastAt = stats?.optLong("lastAt", 0L) ?: 0L,
+            steam = steam,
+            years = years,
+            sources = sources,
+            sessionList = sessions,
+        )
+    }
+
+    fun postDiag(c: Context, json: String): Res<Unit> {
+        val r = send(c, "POST", "/api/device/v1/diag", json, newEndpoint = true)
+        return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
+    }
+
+    /** What Steam says is running now: (appid, game) or null. */
+    data class Now(val appid: Long, val game: String?)
+
+    fun now(c: Context): Res<Now?> {
+        val r = get(c, "/api/device/v1/now")
+        if (r !is Res.Ok) return r as Res.Err
+        return try {
+            val o = JSONObject(r.value)
+            val n = if (o.has("nowPlaying")) o.optJSONObject("nowPlaying") else o
+            val appid = n?.optLong("appid", 0L) ?: 0L
+            Res.Ok(if (n == null || appid <= 0L) null else Now(appid, str(n, "game")))
+        } catch (e: Exception) {
+            Res.Err(Fail.SERVER, "bad now: ${e.message}")
+        }
+    }
+
+    data class SteamApp(val appid: Long, val name: String, val icon: String?, val lastPlayed: Long)
+
+    fun steamApps(c: Context, q: String): Res<List<SteamApp>> {
+        val r = get(c, "/api/device/v1/steam/apps?q=" + enc(q))
+        if (r !is Res.Ok) return r as Res.Err
+        return try {
+            val t = r.value.trim()
+            val arr = if (t.startsWith("[")) JSONArray(t) else JSONObject(t).let { it.optJSONArray("apps") ?: it.optJSONArray("items") ?: JSONArray() }
+            val out = ArrayList<SteamApp>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optLong("appid", 0L)
+                if (id <= 0) continue
+                out.add(SteamApp(id, str(o, "name") ?: "App $id", str(o, "icon"), msOf(o.optLong("lastPlayed", 0L))))
+            }
+            Res.Ok(out)
+        } catch (e: Exception) {
+            Res.Err(Fail.SERVER, "bad apps: ${e.message}")
+        }
+    }
+
+    /** Features a hub may not have yet: after a 404 the TV hides them for a day, then asks again. */
+    object Missing {
+        private fun p(c: Context) = c.getSharedPreferences("tv_missing", Context.MODE_PRIVATE)
+        fun mark(c: Context, feature: String) = p(c).edit().putLong(feature, System.currentTimeMillis()).apply()
+        fun clear(c: Context, feature: String) = p(c).edit().remove(feature).apply()
+        fun has(c: Context, feature: String): Boolean = System.currentTimeMillis() - p(c).getLong(feature, 0L) < 86_400_000L
+    }
 
     fun setShot(c: Context, id: String, favorite: Boolean? = null, status: String? = null): Res<Unit> {
         val body = JSONObject()
@@ -297,6 +512,8 @@ object GamehubTv {
             art = artOf(o.optJSONObject("art")) ?: cover?.art,
             subtitle = str(o, "subtitle"),
             avatar = str(o, "avatar"),
+            last = o.optLong("last", 0L),
+            playtimeMin = o.optInt("playtimeMin", o.optJSONObject("steam")?.optInt("playtimeMin", 0) ?: 0),
         )
     }
 
@@ -360,7 +577,8 @@ object GamehubTv {
 
     private fun get(c: Context, path: String): Res<String> = send(c, "GET", path, null)
 
-    private fun send(c: Context, method: String, path: String, json: String?): Res<String> {
+    /** [newEndpoint]: a 404 on a write means the hub does not have this call yet (update Gamehub). */
+    private fun send(c: Context, method: String, path: String, json: String?, newEndpoint: Boolean = false): Res<String> {
         if (GamehubStore.token(c) == null) return Res.Err(Fail.NOT_LINKED, "not linked")
         return try {
             val conn = open(c, method, base(c) + path) ?: return Res.Err(Fail.NOT_LINKED, "not linked")
@@ -380,7 +598,7 @@ object GamehubTv {
                     status in 200..299 -> Res.Ok(text)
                     // A 404 on the read API means a hub from before the TV app; a redirect means
                     // Cloudflare Access is not letting /api/device/v1 through yet. Both: update Gamehub.
-                    status == 404 && method == "GET" -> Res.Err(Fail.NOT_DEPLOYED, "HTTP 404")
+                    status == 404 && (method == "GET" || newEndpoint) -> Res.Err(Fail.NOT_DEPLOYED, "HTTP 404")
                     status in 300..399 -> Res.Err(Fail.NOT_DEPLOYED, "HTTP $status (Access)")
                     status == 401 -> { onUnauthorized(c); Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status") }
                     status == 403 -> Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status")

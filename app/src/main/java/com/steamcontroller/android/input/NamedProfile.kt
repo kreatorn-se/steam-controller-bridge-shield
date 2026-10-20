@@ -54,7 +54,12 @@ data class NamedProfile(
     val leftCurve: Float = 1f,
     val rightCurve: Float = 1f,
     /** Trackpad pointer acceleration. 0..2, 0 = none. */
-    val padAccel: Float = 0f
+    val padAccel: Float = 0f,
+    /**
+     * Steam games this profile follows (JSON `steamAppIds`, optional): applied while Steam says
+     * one of them is running (hub/SteamSwitch). Replaces app bindings on the Shield.
+     */
+    val steamAppIds: List<Long> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put(KEY_ID, id)
@@ -91,6 +96,7 @@ data class NamedProfile(
         put(KEY_L_CURVE, leftCurve.toDouble())
         put(KEY_R_CURVE, rightCurve.toDouble())
         put(KEY_PAD_ACCEL, padAccel.toDouble())
+        if (steamAppIds.isNotEmpty()) put(KEY_STEAM_APPS, JSONArray(steamAppIds))
     }
 
     companion object {
@@ -128,6 +134,7 @@ data class NamedProfile(
         const val KEY_L_CURVE = "lCurve"
         const val KEY_R_CURVE = "rCurve"
         const val KEY_PAD_ACCEL = "padAccel"
+        const val KEY_STEAM_APPS = "steamAppIds"
 
         fun clampOuter(v: Int): Int = v.coerceIn(70, 100)
         fun clampCurve(v: Float): Float = if (v.isNaN()) 1f else v.coerceIn(0.5f, 3f)
@@ -191,7 +198,8 @@ data class NamedProfile(
                 rightOuter = clampOuter(obj.optInt(KEY_R_OUTER, 100)),
                 leftCurve = clampCurve(obj.optDouble(KEY_L_CURVE, 1.0).toFloat()),
                 rightCurve = clampCurve(obj.optDouble(KEY_R_CURVE, 1.0).toFloat()),
-                padAccel = clampPadAccel(obj.optDouble(KEY_PAD_ACCEL, 0.0).toFloat())
+                padAccel = clampPadAccel(obj.optDouble(KEY_PAD_ACCEL, 0.0).toFloat()),
+                steamAppIds = obj.optJSONArray(KEY_STEAM_APPS)?.let { a -> (0 until a.length()).map { a.optLong(it, 0L) }.filter { it > 0L }.distinct() } ?: emptyList(),
             )
         }
 

@@ -53,6 +53,10 @@ interface Host {
     /** Full-screen show mode over everything (Back closes it). */
     fun openShow(req: com.steamcontroller.android.ui.tv.ShowRequest)
     val showOpen: Boolean
+    /** A game's hub, over the current page (Back closes it). */
+    fun openGame(name: String)
+    /** A capture changed through the hold menu (favourite, album, background) or was [hidden]. */
+    fun contentChanged(item: com.steamcontroller.android.ui.tv.HoldItem? = null, hidden: Boolean = false)
     fun openSheet(sheet: Sheet)
     fun closeSheet()
     fun openQuickSwitch()

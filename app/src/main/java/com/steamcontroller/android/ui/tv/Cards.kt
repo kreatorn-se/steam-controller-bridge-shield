@@ -203,6 +203,37 @@ class Tile(
     fun setActivated2(on: Boolean) { ring.activated = on }
 }
 
+/** A bare picture card of any size (justified grids): rounded image, focus ring, heart badge. */
+class PicCard(ctx: Context) : FrameLayout(ctx) {
+    val image = ImageView(ctx)
+    private val heart = ImageView(ctx)
+
+    init {
+        val pad = dp(3)
+        setPadding(pad, pad, pad, pad)
+        clipChildren = false
+        foreground = FocusRing(resources.displayMetrics.density, 6f)
+        isFocusable = true
+        isClickable = true
+        FocusFx.attach(this, 1.05f)
+        image.scaleType = ImageView.ScaleType.CENTER_CROP
+        image.setBackgroundColor(C.surface2)
+        image.roundCorners(6f)
+        addView(image, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        heart.setImageResource(R.drawable.ic_heart_badge)
+        heart.visibility = GONE
+        addView(heart, LayoutParams(dp(20), dp(20), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(8), dp(8), 0) })
+    }
+
+    fun setFavorite(on: Boolean) { heart.visibility = if (on) VISIBLE else GONE }
+}
+
+/** Vertical list whose keyline depends on the focused item (a header scrolls to the top). */
+class KeylineLinearV(ctx: Context, private val keylineFor: (View) -> Int) : LinearLayoutManager(ctx, VERTICAL, false) {
+    override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean =
+        keylineScroll(this, false, parent, child, keylineFor(child), immediate)
+}
+
 /** Horizontal or vertical list that keeps the focused item's start on a fixed keyline. */
 class KeylineLinear(ctx: Context, orientation: Int, private val keyline: () -> Int) : LinearLayoutManager(ctx, orientation, false) {
     override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean =

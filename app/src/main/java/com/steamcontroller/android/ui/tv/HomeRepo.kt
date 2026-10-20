@@ -56,7 +56,9 @@ object HomeRepo {
         if (!GamehubStore.isLinked(app)) { publish(State.NotLinked); return }
         val gen = generation
         io.execute {
+            HomeTiming.mark("cache-read-start")
             val cached = GamehubTv.cachedHome(app)
+            HomeTiming.mark("cache-read-end", if (cached == null) "none" else "rows=${cached.rows.size}")
             main.post {
                 // Only if the network has not already answered.
                 if (cached != null && gen == generation && state !is State.Ready) publish(State.Ready(cached, live = false, problem = null))
@@ -75,7 +77,10 @@ object HomeRepo {
         fetching = true
         val gen = generation
         io.execute {
+            HomeTiming.mark("fetch-start")
+            val t = android.os.SystemClock.elapsedRealtime()
             val r = GamehubTv.home(app)
+            HomeTiming.mark("fetch-end", "${android.os.SystemClock.elapsedRealtime() - t}ms " + (if (r is GamehubTv.Res.Ok) "ok" else (r as GamehubTv.Res.Err).fail.name) + " " + GamehubTv.lastHomeTiming)
             val cached = if (r is GamehubTv.Res.Err && state !is State.Ready) GamehubTv.cachedHome(app) else null
             main.post {
                 fetching = false

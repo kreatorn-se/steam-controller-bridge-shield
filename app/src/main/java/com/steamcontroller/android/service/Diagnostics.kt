@@ -14,6 +14,8 @@ object Diagnostics {
     private const val MAX_LINES = 256
     private val lines = ArrayDeque<String>(MAX_LINES)
     private val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    /** Count of lines ever recorded; the uploader (hub/Diag) asks for what came after its mark. */
+    private var recorded = 0L
 
     @Synchronized
     fun record(tag: String, message: String) {
@@ -21,6 +23,14 @@ object Diagnostics {
         lines.addLast(
             "${timestamp.format(Date())} +${SystemClock.elapsedRealtime()}ms $tag $message"
         )
+        recorded++
+    }
+
+    /** Lines recorded after [mark] (as many as the ring still holds), and the new mark. */
+    @Synchronized
+    fun since(mark: Long): Pair<Long, List<String>> {
+        val missing = (recorded - mark).coerceIn(0L, lines.size.toLong()).toInt()
+        return recorded to lines.toList().takeLast(missing)
     }
 
     @Synchronized

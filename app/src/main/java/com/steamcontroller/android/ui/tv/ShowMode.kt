@@ -53,7 +53,14 @@ import kotlinx.coroutines.withContext
  * Selection inside the filmstrip and grid is drawn by hand rather than with Android focus, so
  * nothing here can lose or trap focus. The screen stays awake while it plays.
  */
-class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest, private val onClose: () -> Unit) {
+class ShowMode(
+    private val act: AppCompatActivity,
+    private val req: ShowRequest,
+    private val hold: Hold?,
+    private val onOpenGame: (String) -> Unit,
+    private val onChanged: (HoldItem, Boolean) -> Unit,
+    private val onClose: () -> Unit,
+) {
     private enum class Stage { NORMAL, STRIP, GRID, OPTIONS }
 
     private val ctx = act
@@ -109,7 +116,8 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     private var optSel = 0
     private var stage = Stage.NORMAL
     private var playing = true
-    private var interval = TvPrefs.interval(ctx)
+    private val calm = req.calm
+    private var interval = req.intervalSec?.coerceIn(3, 600) ?: TvPrefs.interval(ctx)
     private var captionGame: String? = null
     private var captionShown = false
     private var collToken = 0
@@ -290,7 +298,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
 
     fun start() {
         root.alpha = 0f
-        root.animate().alpha(1f).setDuration(Motion.SLOW).start()
+        root.animate().alpha(1f).setDuration(if (calm) 900L else Motion.SLOW).start()
         root.requestFocus()
         openColl(collIndex, req.startShotId, req.preload, req.preloadNext, announce = false)
         setKeepOn()
@@ -336,7 +344,8 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     }
 
     private fun setKeepOn() {
-        if (playing && !closed) act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // The in-app screensaver never holds the screen on: the system may still sleep the TV.
+        if (playing && !closed && !calm) act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else act.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
@@ -393,15 +402,21 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
                     val ids = fresh.mapTo(HashSet()) { it.id }
                     if (hadItems && preload != null) for (s in items) if (s.id !in ids) { fresh.add(s); ids.add(s.id) }
                     items.clear(); items.addAll(fresh)
+                    if (calm && req.shuffle) {
+                        // Keep what is on screen first, shuffle the rest.
+                        val head = items.firstOrNull { it.id == keep }
+                        items.shuffle()
+                        if (head != null) { items.remove(head); items.add(0, head) }
+                    }
                     next = r.value.next
                     moreFailedAt = 0L
-                    if (items.isEmpty()) { showMessage(ctx.getString(R.string.show_empty)); return@launch }
+                    if (items.isEmpty()) { if (calm) close() else showMessage(ctx.getString(R.string.show_empty)); return@launch }
                     index = items.indexOfFirst { it.id == keep }.coerceAtLeast(0)
                     sel = index
                     refreshThumbs()
                     if (!hadItems) { message.visibility = View.GONE; showCurrent(manual = false, fade = true) }
                 }
-                is GamehubTv.Res.Err -> if (items.isEmpty()) showMessage(when (r.fail) {
+                is GamehubTv.Res.Err -> if (items.isEmpty() && calm) close() else if (items.isEmpty()) showMessage(when (r.fail) {
                     GamehubTv.Fail.NOT_DEPLOYED -> ctx.getString(R.string.show_update)
                     else -> ctx.getString(R.string.show_offline, r.message)
                 })
@@ -482,14 +497,14 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         val token = ++imgToken
         handler.removeCallbacks(advance)
         val back = if (front === imgA) imgB else imgA
-        Img.load(shot.previewUrl, full) { bmp ->
+        Img.load(shot.previewUrl, full, urgent = true) { bmp ->
             if (token != imgToken || closed) return@load
             if (bmp == null) {
                 // Unreachable image: move on rather than freeze on the previous one.
                 if (playing) handler.postDelayed(advance, 1500L)
                 return@load
             }
-            present(back, bmp, shot, token, if (manual) 280L else if (fade) 900L else 1L)
+            present(back, bmp, shot, token, if (calm) 1600L else if (manual) 280L else if (fade) 900L else 1L)
         }
         updateCaption(shot, manual)
         updateHud(manual)
@@ -557,7 +572,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     private fun startKenBurns(v: ImageView) {
         kb?.cancel()
         v.scaleX = 1f; v.scaleY = 1f; v.translationX = 0f; v.translationY = 0f
-        if (!TvPrefs.kenBurns(ctx)) return
+        if (!calm && !TvPrefs.kenBurns(ctx)) return
         val zoomIn = index % 2 == 0
         val s0 = if (zoomIn) 1f else 1.045f
         val s1 = if (zoomIn) 1.045f else 1f
@@ -578,6 +593,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
     // ── caption and HUD ───────────────────────────────────────────────────────────────
 
     private fun updateCaption(shot: Shot, manual: Boolean) {
+        if (calm) return
         val game = shot.gameOrUnknown()
         capHeart.visibility = if (shot.favorite) View.VISIBLE else View.GONE
         val meta = Fmt.meta(shot)
@@ -639,6 +655,7 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
 
     /** One quiet pill: "Paused" while paused, nothing while playing (device-api.md). */
     private fun updateHud(@Suppress("UNUSED_PARAMETER") manual: Boolean) {
+        if (calm) { hud.alpha = 0f; return }
         hudCount.visibility = View.GONE
         hudState.text = ctx.getString(R.string.show_paused)
         hudState.setTextColor(C.text)
@@ -874,12 +891,25 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         val k = e.keyCode
         if (k == KeyEvent.KEYCODE_VOLUME_UP || k == KeyEvent.KEYCODE_VOLUME_DOWN || k == KeyEvent.KEYCODE_VOLUME_MUTE || k == KeyEvent.KEYCODE_POWER) return false
         if (closed) return true
+        // Screensaver: any key wakes, on release so the release never reaches the page below.
+        if (calm) {
+            if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) close()
+            return true
+        }
         // Back acts on release, so its release never reaches the page underneath.
         if (Keys.isBack(k)) {
             if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) back()
             return true
         }
+        // OK: a tap acts on release (pause, jump); held for 1.5 s it opens the hold menu.
+        if (Keys.isSelect(k) && hold != null && stage != Stage.OPTIONS && items.isNotEmpty()) {
+            if (e.action == KeyEvent.ACTION_DOWN) {
+                if (e.repeatCount == 0) hold.arm(null) { holdFired() }
+            } else if (hold.firedHold) hold.clearFired() else { hold.cancel(); select() }
+            return true
+        }
         if (e.action != KeyEvent.ACTION_DOWN) return true
+        hold?.cancel()
         val first = e.repeatCount == 0
         if (bumper(k)) return true
         when {
@@ -928,6 +958,54 @@ class ShowMode(private val act: AppCompatActivity, private val req: ShowRequest,
         if (playing && (stage == Stage.NORMAL || stage == Stage.OPTIONS)) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
         renderOptions()
         flashHud(ctx.getString(R.string.show_per_picture, interval))
+    }
+
+    // ── hold menu ─────────────────────────────────────────────────────────────────────
+
+    private fun holdFired() {
+        val i = if (stage == Stage.STRIP || stage == Stage.GRID) sel else index
+        val shot = items.getOrNull(i) ?: return
+        if (playing) setPlaying(false)
+        hold?.openMenu(HoldItem(shot, colls.getOrNull(collIndex), ArrayList(items)), holdContext)
+    }
+
+    private val holdContext = object : HoldContext {
+        override fun slideshowFrom(item: HoldItem) {
+            val i = items.indexOfFirst { it.id == item.shot.id }
+            if (i < 0) return
+            index = i; sel = i
+            setStage(Stage.NORMAL)
+            showCurrent(manual = true)
+            setPlaying(true)
+        }
+        override fun showSession(item: HoldItem) {
+            colls = listOf(CollRef("session:" + item.shot.id, ctx.getString(R.string.hold_session_title)))
+            openColl(0, item.shot.id, null, null, announce = true)
+            setStage(Stage.NORMAL)
+        }
+        override fun openHub(game: String) {
+            close()
+            onOpenGame(game)
+        }
+        override fun changed(item: HoldItem, hidden: Boolean) {
+            onChanged(item, hidden)
+            if (closed) return
+            if (hidden) {
+                val i = items.indexOfFirst { it.id == item.shot.id }
+                if (i >= 0) {
+                    items.removeAt(i)
+                    if (items.isEmpty()) { close(); return }
+                    if (index >= items.size) index = 0
+                    sel = sel.coerceAtMost(items.size - 1)
+                    refreshThumbs()
+                    showCurrent(manual = true)
+                }
+            } else {
+                val cur = items.getOrNull(index)
+                if (cur != null) capHeart.visibility = if (cur.favorite) View.VISIBLE else View.GONE
+                refreshThumbs()
+            }
+        }
     }
 
     private fun back() {

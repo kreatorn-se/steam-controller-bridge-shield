@@ -15,7 +15,11 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.lifecycle.lifecycleScope
 import com.steamcontroller.android.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.steamcontroller.android.hub.GamehubTv
 import com.steamcontroller.android.hub.GamehubTv.Shot
 import com.steamcontroller.android.ui.FocusMemoryFrame
@@ -272,6 +276,7 @@ class HomePage(host: Host) : Page(host) {
 
     private fun content(s: HomeRepo.State.Ready) {
         val h = s.home
+        HomeTiming.mark(if (s.live) "render-live" else "render-cached", "rows=${h.rows.size} hero=${h.hero.size}")
         status.text = when {
             s.problem == null -> ""
             s.problem.fail == GamehubTv.Fail.NOT_DEPLOYED -> ctx.getString(R.string.tv_status_update)
@@ -291,7 +296,8 @@ class HomePage(host: Host) : Page(host) {
         val hadFocus = root.hasFocus()
         if (mode != Mode.CONTENT) {
             mode = Mode.CONTENT
-            heroLayer.background = null
+            // A soft glow under the hero until its picture arrives: never a black screen.
+            heroLayer.background = HeroGlow()
             playBtn.text = ctx.getString(R.string.tv_play_show)
             playBtn.setCompoundDrawablesRelative(Kit.icon(ctx, R.drawable.ic_play, 16, C.accent), null, null, null)
             playBtn.setOnClickListener { playHero() }
@@ -312,6 +318,8 @@ class HomePage(host: Host) : Page(host) {
             if (first || heroList.getOrNull(heroIndex)?.id != keepId) showHero(heroIndex, animate = !first)
             prefetchHero()
         }
+        learnArt(h)
+        ensureGameArt()
         updateRows(h, hadFocus)
     }
 
@@ -356,8 +364,10 @@ class HomePage(host: Host) : Page(host) {
         paintDots()
         val back = if (heroFront === heroA) heroB else heroA
         val spec = Img.Spec(screenW)
-        Img.into(back, shot.previewUrl, spec, fade = false) { _ ->
+        // The hero's preview jumps every queue; it never waits on an original or on thumbnails.
+        Img.into(back, shot.previewUrl, spec, fade = false, urgent = true) { _ ->
             if (heroList.getOrNull(heroIndex)?.id != shot.id || back.drawable == null) return@into
+            HomeTiming.mark("hero-image")
             // The incoming image goes directly above the outgoing one, still under the scrims.
             heroLayer.removeView(back)
             heroLayer.addView(back, 1, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -459,6 +469,34 @@ class HomePage(host: Host) : Page(host) {
         lateinit var list: TvRecycler
         val header = Kit.label(ctx, "", 12.5f, C.text2)
         val count = Kit.label(ctx, "", 11f, C.text3)
+        /** The game's official logo, small, on rows of one game. */
+        val logo = ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_START; visibility = View.GONE }
+    }
+
+    /** One game in the row (a session, the Patina leg): its logo next to the title, when known. */
+    private fun rowLogo(v: RowView) {
+        val game = v.row.shots.map { it.game }.distinct().singleOrNull()
+        val url = GameArt.get(game)?.logo
+        if (url == null) { v.logo.visibility = View.GONE; return }
+        Img.into(v.logo, url, Img.Spec(ctx.dp(120), alpha = true)) { b -> v.logo.visibility = if (b != null) View.VISIBLE else View.GONE }
+    }
+
+    private fun learnArt(h: GamehubTv.Home) {
+        for (s in h.hero) if (s.game != null) GameArt.put(s.game, s.art)
+        h.nowPlaying?.let { GameArt.put(it.game, it.art) }
+        for (r in h.rows) GameArt.putAll(r.colls)
+    }
+
+    private var askedGames = false
+
+    /** Logos for row titles come from the games list: fetch it once in the background. */
+    private fun ensureGameArt() {
+        if (askedGames) return
+        askedGames = true
+        host.activity.lifecycleScope.launch {
+            val list = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "games") ?: GamehubTv.games(ctx).valueOrNull() }
+            if (list != null) { GameArt.putAll(list); for (v in rowViews()) rowLogo(v) }
+        }
     }
 
     private fun rowViews(): List<RowView> = (0 until rowsBox.childCount).map { rowsBox.getChildAt(it) as RowView }
@@ -496,6 +534,7 @@ class HomePage(host: Host) : Page(host) {
     @Suppress("UNCHECKED_CAST")
     private fun refreshRow(v: RowView, r: GamehubTv.Row) {
         v.row = r
+        rowLogo(v)
         v.header.text = r.title
         v.count.text = rowMeta(r)
         val a = v.list.adapter ?: return
@@ -541,8 +580,10 @@ class HomePage(host: Host) : Page(host) {
         v.clipChildren = false
         v.clipToPadding = false
         val head = Kit.row(ctx)
+        head.addView(v.logo, LinearLayout.LayoutParams(ctx.dp(120), ctx.dp(22)).apply { marginEnd = ctx.dp(12) })
         v.header.text = r.title
         head.addView(v.header)
+        rowLogo(v)
         v.count.text = rowMeta(r)
         head.addView(v.count, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(12) })
         v.addView(head, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = left + ctx.dp(3) })
@@ -564,9 +605,10 @@ class HomePage(host: Host) : Page(host) {
         if (r.shots.isNotEmpty()) {
             list.adapter = SimpleAdapter(r.shots, { Tile(ctx, kind.w, kind.h, captionOnFocus = true) }) { view, shot, i ->
                 val t = view as Tile
-                Img.into(t.image, shot.previewUrl, spec)
+                Img.into(t.image, shot.previewUrl, spec) { b -> if (b != null) HomeTiming.mark("first-row-image") }
                 t.setFavorite(shot.favorite)
                 t.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot) + "  ·  " + Fmt.time(shot))
+                t.card.holdItem(HoldItem(shot, v.row.collection?.let { CollRef(it, v.row.title) }, v.row.shots))
                 // Positions can move with in-place updates: ask at click time.
                 t.card.setOnClickListener { val p = list.getChildAdapterPosition(t); if (p >= 0) { rememberOrigin(t.card); playRow(v.row, p) } }
                 t.focusListener = { has -> v.header.setTextColor(if (has) C.text else C.text2) }
@@ -687,6 +729,9 @@ class HomePage(host: Host) : Page(host) {
     }
 
     private fun playColls(r: GamehubTv.Row, i: Int) {
+        // Games open their hub; albums, people and sessions play.
+        val c = r.colls.getOrNull(i) ?: return
+        if (c.collection.startsWith("game:")) { host.openGame(c.collection.removePrefix("game:")); return }
         host.openShow(ShowRequest(r.colls.map { CollRef(it.collection, it.title) }, i))
     }
 

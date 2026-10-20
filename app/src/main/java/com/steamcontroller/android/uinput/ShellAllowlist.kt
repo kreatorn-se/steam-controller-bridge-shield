@@ -11,6 +11,10 @@ import com.steamcontroller.android.BuildConfig
  * - `settings get|put|delete secure show_ime_with_hard_keyboard` (UInputGamepad)
  * - `cmd deviceidle whitelist +<this app>` so Android may restart the service after a kill
  * - `appops set <this app> SYSTEM_ALERT_WINDOW allow` so the status pill can draw above games
+ * - `pm install -r -t <apk>` for the app's own self-update, and only for a file named
+ *   SteamControllerBridge-v<version>.apk directly inside this app's files/update directory.
+ *   Android itself refuses an APK signed with a different key, so this can only ever install
+ *   a newer build of this same app.
  *
  * Adding a system action means adding its exact shape here.
  */
@@ -19,7 +23,14 @@ internal object ShellAllowlist {
     // A 4K PNG takes the Shield 15-30 s to encode while a GFN stream is running.
     private const val SCREENCAP_TIMEOUT_MS = 120_000L
 
-    fun timeoutFor(cmd: Array<String>): Long = if (cmd.firstOrNull() == "screencap") SCREENCAP_TIMEOUT_MS else TIMEOUT_MS
+    // Installing a ~20 MB APK: dexopt on the Shield can take a minute or two.
+    private const val INSTALL_TIMEOUT_MS = 240_000L
+
+    fun timeoutFor(cmd: Array<String>): Long = when (cmd.firstOrNull()) {
+        "screencap" -> SCREENCAP_TIMEOUT_MS
+        "pm" -> INSTALL_TIMEOUT_MS
+        else -> TIMEOUT_MS
+    }
     const val MAX_OUTPUT_BYTES = 64 * 1024
 
     const val SCREENSHOT_DIR = "/sdcard/Pictures/Screenshots"
@@ -33,6 +44,12 @@ internal object ShellAllowlist {
         "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/captures",
     )
     private val INT_VALUE = Regex("""-?\d{1,10}""")
+
+    private val UPDATE_DIRS = listOf(
+        "/storage/emulated/0/Android/data/${BuildConfig.APPLICATION_ID}/files/update",
+        "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/update",
+    )
+    private val UPDATE_FILE = Regex("""SteamControllerBridge-v[0-9.]+(-[a-z0-9]+)?\.apk""")
 
     fun isAllowed(cmd: Array<String>): Boolean {
         val args = cmd.toList()
@@ -53,6 +70,10 @@ internal object ShellAllowlist {
                 true
             }
 
+            args.size == 5 && args[0] == "pm" && args[1] == "install" && args[2] == "-r" && args[3] == "-t" -> {
+                isUpdatePath(args[4])
+            }
+
             args.size >= 4 && args[0] == "settings" && args[2] == "secure" && args[3] == IME_SETTING -> {
                 when (args[1]) {
                     "get", "delete" -> args.size == 4
@@ -66,6 +87,12 @@ internal object ShellAllowlist {
             }
         }
     }
+
+    private fun isUpdatePath(path: String): Boolean =
+        UPDATE_DIRS.any { dir ->
+            val prefix = "$dir/"
+            path.startsWith(prefix) && UPDATE_FILE.matches(path.removePrefix(prefix))
+        }
 
     private fun isScreenshotPath(path: String): Boolean =
         (CAPTURE_DIRS + SCREENSHOT_DIR).any { dir ->

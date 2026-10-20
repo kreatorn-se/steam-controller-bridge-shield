@@ -29,6 +29,11 @@ import com.steamcontroller.android.ui.widget.Kit
  * and a diagnostics export for bug reports. For reference only; nothing here is interactive.
  */
 class DebugActivity : AppCompatActivity() {
+
+    // The UI at 85 % on a TV (ui/tv/TvScale).
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.steamcontroller.android.ui.tv.TvScale.wrap(newBase))
+    }
     private lateinit var ticker: LiveTicker
     private val chips = ArrayList<Pair<TextView, Int>>()
     private val chipOn = HashMap<TextView, Boolean>()
