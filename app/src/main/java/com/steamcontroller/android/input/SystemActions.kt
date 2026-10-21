@@ -1,11 +1,14 @@
 package com.steamcontroller.android.input
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.steamcontroller.android.hub.CaptureLevels
 import com.steamcontroller.android.hub.CaptureStore
 import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.hub.GamehubSync
+import com.steamcontroller.android.hub.RawFrame
+import com.steamcontroller.android.service.Diagnostics
 import com.steamcontroller.android.service.UsageStatsHelper
 import com.steamcontroller.android.ui.pill.Pill
 import com.steamcontroller.android.uinput.ShellAllowlist
@@ -33,7 +36,9 @@ object SystemActions {
      *
      * The pill is never in a capture: any pill on screen is taken down before screencap starts and
      * none is drawn until screencap has exited ([Pill.holdForCapture]). CAPTURED then appears
-     * once the PNG is complete on disk, straight after screencap returns.
+     * once the frame is complete on disk, straight after screencap returns: about a second with
+     * the raw framebuffer (`screencap <file>.raw`, no PNG encode; [RawFrame]), the PNG encode
+     * happening afterwards in [CaptureLevels].
      */
     fun takeScreenshot(context: Context, runShell: (Array<String>) -> Int) {
         val app = context.applicationContext
@@ -54,41 +59,66 @@ object SystemActions {
 
                 Pill.holdForCapture()
                 holding = true
+                val shotStart = SystemClock.elapsedRealtime()
                 var raw: File? = null
                 var pictures: File? = null
                 var failText = "CAPTURE FAILED"
                 if (queueDir != null) {
-                    // Write under a temporary name: a 4K PNG takes the Shield 15-30 s to encode
-                    // during a stream, and the uploader must never pick up a half-written file.
-                    val tmp = File(queueDir, "${CaptureStore.TMP_PREFIX}$id.png")
                     val stash = File(queueDir, "$id${CaptureStore.RAW_SUFFIX}")
-                    val exit = runShell(arrayOf("screencap", "-p", tmp.path))
-                    if (exit == 0 && CaptureStore.isCompletePng(tmp) && tmp.renameTo(stash)) {
-                        raw = stash
-                    } else {
-                        Log.w(TAG, "screencap into queue failed (exit $exit, ${tmp.length()} bytes)")
-                        tmp.delete()
-                        // Only fall back to Pictures when the queue directory itself was unwritable;
-                        // re-encoding after a slow capture would just double the wait.
-                        if (exit != -1) {
-                            val p = captureViaPictures(runShell, id, queueDir)
-                            pictures = p.file
-                            if (pictures != null) raw = stash
-                            p.failText?.let { failText = it }
+                    // PNG into a temporary name, then renamed: a 4K PNG takes the Shield 10-30 s to
+                    // encode during a stream, and nothing may pick up a half-written file.
+                    fun screencapPng(): Int {
+                        val tmp = File(queueDir, "${CaptureStore.TMP_PREFIX}$id.png")
+                        val exit = runShell(arrayOf("screencap", "-p", tmp.path))
+                        if (exit == 0 && CaptureStore.isCompletePng(tmp) && tmp.renameTo(stash)) raw = stash
+                        else {
+                            Log.w(TAG, "screencap -p into queue failed (exit $exit, ${tmp.length()} bytes)")
+                            tmp.delete()
                         }
+                        return exit
+                    }
+                    var exit: Int
+                    if (CaptureStore.rawBacklog(queueDir) < CaptureStore.MAX_RAW_BACKLOG) {
+                        // The raw framebuffer: no encode, about a second for a 4K frame. Straight
+                        // to <id>.raw (the orphan pass leaves files younger than a minute alone).
+                        exit = runShell(arrayOf("screencap", stash.path))
+                        val check = if (exit == 0) RawFrame.check(stash) else null
+                        if (check is RawFrame.Check.Ok) {
+                            raw = stash
+                        } else {
+                            val why = (check as? RawFrame.Check.Bad)?.reason ?: "exit $exit"
+                            Log.w(TAG, "raw screencap unusable ($why)")
+                            Diagnostics.record(TAG, "capture $id raw screencap unusable ($why)" + if (exit == 0) " -> PNG" else "")
+                            stash.delete()
+                            // A frame we cannot read (another pixel format): the PNG way instead.
+                            if (exit == 0) exit = screencapPng()
+                        }
+                    } else {
+                        Diagnostics.record(TAG, "capture $id: ${CaptureStore.MAX_RAW_BACKLOG}+ raw frames waiting -> PNG")
+                        exit = screencapPng()
+                    }
+                    // Only fall back to Pictures when the queue directory itself was unwritable;
+                    // re-encoding after a slow capture would just double the wait.
+                    if (raw == null && exit != -1) {
+                        val p = captureViaPictures(runShell, id, queueDir)
+                        pictures = p.file
+                        if (pictures != null) raw = stash
+                        p.failText?.let { failText = it }
                     }
                 }
-                if (raw == null || queueDir == null) {
+                val screencapMs = SystemClock.elapsedRealtime() - shotStart
+                val rawFile = raw
+                if (rawFile == null || queueDir == null) {
                     release(Pill.Kind.FAILED, failText)
                     return@Thread
                 }
                 CaptureStore.writeMeta(app, id, capturedAt, fg)
                 val linked = GamehubStore.isLinked(app)
-                // screencap has exited and the PNG is complete: now, and only now, the pill.
+                // screencap has exited and its frame is complete on disk: now, and only now, the pill.
                 // Unlinked, the capture is stored for good already (processing only changes pixels);
                 // linked, GamehubSync shows SAVED TO GAMEHUB once the upload has gone through.
                 if (linked) release(Pill.Kind.CAPTURED, "CAPTURED") else release(Pill.Kind.SAVED, "CAPTURED · SAVED")
-                CaptureLevels.submit(queueDir, id, raw, pictures, GamehubStore.captureSaturation(app)) { published ->
+                CaptureLevels.submit(queueDir, id, rawFile, pictures, GamehubStore.captureSaturation(app), screencapMs) { published ->
                     if (!published) {
                         Pill.show(app, Pill.Kind.FAILED, "CAPTURE FAILED")
                     } else if (linked) {

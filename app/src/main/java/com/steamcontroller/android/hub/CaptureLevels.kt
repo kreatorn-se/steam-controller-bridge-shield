@@ -11,26 +11,29 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
- * Expands limited-range (16–235) captures to full range before anything else sees them.
+ * Turns a fresh capture into the PNG the uploader sends: levels (limited-range 16–235 video
+ * expanded to full range) and the capture colour boost, in one pass, then one PNG encode.
  *
- * screencap leaves a capture in the queue as `<id>.raw`, which neither the uploader nor the
- * housekeeping touches. One background thread (captures are 33 MB bitmaps at 4K, so never two at
- * once) decodes it, measures it on a coarse grid ([LevelsMath]) and, if it is limited range,
- * expands the levels and re-encodes it to a temporary file. Only then does the capture appear as
- * `<id>.png`, by rename, so the uploader and the preview JPEG only ever see the finished image.
- * Anything that goes wrong (decode failure, out of memory, a failed encode) publishes the file
- * exactly as screencap wrote it.
+ * screencap leaves the capture in the queue as `<id>.raw`, which neither the uploader nor the
+ * housekeeping touches. Normally that is the raw framebuffer (`screencap <file>.raw`, [RawFrame]):
+ * written in about a second, read straight into a bitmap, no PNG decode. A `screencap -p` PNG
+ * (the fallback when the raw frame is in a format we do not take, or too many raws are waiting)
+ * goes through the same steps via BitmapFactory. One background thread does this (a 4K frame is a
+ * 33 MB bitmap, so never two at once), then the capture appears as `<id>.png` by rename, so the
+ * uploader and the preview JPEG only ever see the finished image.
  *
- * A `<id>.lvtry` marker exists while a capture is being decoded. If the process dies with it in
- * place (lmkd killing the app for the 33 MB bitmap is the likely cause), the orphan pass publishes
- * that capture as captured instead of trying again, so one capture can never cause a kill loop.
- * Every capture then gets the capture colour boost (a saturation step around Rec.709 luma, in the
- * same pass), unless it is set to Off; with Off and full-range levels the file is published as is.
+ * Failures: a PNG input is published as captured. A raw frame cannot be (it is not an image
+ * file), so it is encoded once more without processing; if that fails too the capture is
+ * dropped and logged. A `<id>.lvtry` marker holds the attempt ("full" or "plain") while it runs;
+ * if the process dies with it in place (lmkd, the likely cause), the orphan pass does not repeat
+ * that attempt: after "full" it encodes plain, after "plain" it drops the capture (a PNG input is
+ * published as captured), so one capture can never cause a kill loop.
  * The decision travels with the upload as `levels: {p1, p5, p99, expanded, saturation}` in
  * `<id>.json`.
  */
@@ -42,11 +45,13 @@ object CaptureLevels {
     private const val ORPHAN_AGE_MS = 60_000L
     /** GamehubSync skips PNGs younger than this; a published capture should not have to wait. */
     private const val UPLOAD_SETTLE_MS = 2_000L
+    private const val ATTEMPT_FULL = "full"
+    private const val ATTEMPT_PLAIN = "plain"
 
     sealed class Outcome {
-        /** Re-encoded: levels [expanded] and/or the saturation boost applied. */
-        data class Encoded(val levels: LevelsMath.Levels, val expanded: Boolean) : Outcome()
-        /** Neither applies (full range, boost off): published as captured. */
+        /** Encoded to PNG: levels [expanded] or not, the boost of [saturation] % (0: none). */
+        data class Encoded(val levels: LevelsMath.Levels, val expanded: Boolean, val saturation: Int) : Outcome()
+        /** A PNG input that needs nothing (full range, boost off): published as captured. */
         data class Unchanged(val levels: LevelsMath.Levels) : Outcome()
         data class Failed(val reason: String) : Outcome()
     }
@@ -63,11 +68,12 @@ object CaptureLevels {
 
     /**
      * Queues [raw] (`<id>.raw` in [queueDir]) for processing with a saturation boost of
-     * [saturation] percent (0 = off, see GamehubStore.captureSaturation); [done] runs on the worker
-     * thread after `<id>.png` is in place (true) or could not be published at all (false).
+     * [saturation] percent (0 = off, see GamehubStore.captureSaturation); [screencapMs] is how
+     * long screencap took (for the log; -1 unknown). [done] runs on the worker thread after
+     * `<id>.png` is in place (true) or could not be published at all (false).
      */
-    fun submit(queueDir: File, id: String, raw: File, pictures: File?, saturation: Int, done: (Boolean) -> Unit) {
-        submitJob(id, done) { finish(queueDir, id, raw, pictures, saturation.coerceIn(0, 100)) }
+    fun submit(queueDir: File, id: String, raw: File, pictures: File?, saturation: Int, screencapMs: Long, done: (Boolean) -> Unit) {
+        submitJob(id, done) { finish(queueDir, id, raw, pictures, saturation.coerceIn(0, 100), screencapMs, plain = false) }
     }
 
     private fun submitJob(id: String, done: (Boolean) -> Unit, job: () -> Boolean) {
@@ -85,9 +91,29 @@ object CaptureLevels {
         }
     }
 
+    private fun note(line: String) {
+        Log.i(TAG, line)
+        Diagnostics.record(TAG, line)
+    }
+
+    private fun isPngFile(f: File): Boolean = try {
+        val head = ByteArray(8)
+        val n = f.inputStream().use { it.read(head) }
+        n == 8 && RawFrame.isPng(head)
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** A capture that cannot be published: gone, with its meta, so it never blocks the queue. */
+    private fun drop(queueDir: File, id: String, raw: File, why: String) {
+        note("capture levels $id dropped ($why)")
+        raw.delete()
+        File(queueDir, "$id.json").delete()
+    }
+
     /**
      * Captures a killed process left behind (called from the sync loop): a `.raw` with no attempt
-     * marker is processed again; one whose attempt was interrupted is published as captured.
+     * marker is processed again; after an interrupted attempt see the class comment.
      */
     fun resumeOrphans(queueDir: File, saturation: Int, done: (Boolean) -> Unit) {
         val now = System.currentTimeMillis()
@@ -104,24 +130,33 @@ object CaptureLevels {
         for ((id, raw) in raws) {
             if (id in inFlight || now - raw.lastModified() < ORPHAN_AGE_MS) continue
             val marker = File(queueDir, "$id${CaptureStore.TRY_SUFFIX}")
-            if (marker.exists()) {
-                submitJob(id, done) {
-                    val line = "capture levels $id skipped after interrupted attempt -> left as captured"
-                    Log.w(TAG, line)
-                    Diagnostics.record(TAG, line)
+            val attempt = if (marker.exists()) (try { marker.readText().trim() } catch (_: Throwable) { "" }).ifEmpty { ATTEMPT_FULL } else null
+            when {
+                attempt == null -> {
+                    Log.i(TAG, "resuming orphaned capture $id")
+                    submit(queueDir, id, raw, null, saturation, -1L, done)
+                }
+                isPngFile(raw) -> submitJob(id, done) {
+                    note("capture levels $id skipped after interrupted attempt -> left as captured")
                     CaptureStore.addLevels(queueDir, id, JSONObject().put("expanded", false).put("saturation", 0).put("error", "interrupted"))
                     val ok = File(queueDir, "$id.png").isFile && raw.delete() || publish(raw, File(queueDir, "$id.png"), raw.lastModified())
                     marker.delete()
                     ok
                 }
-            } else {
-                Log.i(TAG, "resuming orphaned capture $id")
-                submit(queueDir, id, raw, null, saturation, done)
+                attempt == ATTEMPT_PLAIN -> submitJob(id, done) {
+                    drop(queueDir, id, raw, "interrupted twice")
+                    marker.delete()
+                    false
+                }
+                else -> submitJob(id, done) {
+                    note("capture levels $id interrupted -> encoding without processing")
+                    finish(queueDir, id, raw, null, 0, -1L, plain = true)
+                }
             }
         }
     }
 
-    private fun finish(queueDir: File, id: String, raw: File, pictures: File?, saturation: Int): Boolean {
+    private fun finish(queueDir: File, id: String, raw: File, pictures: File?, saturation: Int, screencapMs: Long, plain: Boolean): Boolean {
         val png = File(queueDir, "$id.png")
         if (png.isFile) {
             // Published before a crash took the process; only the original is left to drop.
@@ -133,32 +168,50 @@ object CaptureLevels {
         val rawMtime = raw.lastModified()
         val marker = File(queueDir, "$id${CaptureStore.TRY_SUFFIX}")
         val out = File(queueDir, "${CaptureStore.TMP_PREFIX}${id}_lv.png")
+        val pngInput = isPngFile(raw)
         try {
-            try { marker.writeText(System.currentTimeMillis().toString()) } catch (t: Throwable) { Log.w(TAG, "no attempt marker for $id: ${t.message}") }
+            fun attempt(plainPass: Boolean): Outcome {
+                try { marker.writeText(if (plainPass) ATTEMPT_PLAIN else ATTEMPT_FULL) } catch (t: Throwable) { Log.w(TAG, "no attempt marker for $id: ${t.message}") }
+                return try {
+                    processInto(raw, out, if (plainPass) 0 else saturation, plainPass, pngInput)
+                } catch (_: OutOfMemoryError) {
+                    Outcome.Failed("out of memory")
+                } catch (t: Throwable) {
+                    Outcome.Failed(t.javaClass.simpleName + (t.message?.let { ": $it" } ?: ""))
+                }
+            }
             val started = SystemClock.elapsedRealtime()
-            val outcome = try {
-                processInto(raw, out, saturation)
-            } catch (_: OutOfMemoryError) {
-                Outcome.Failed("out of memory")
-            } catch (t: Throwable) {
-                Outcome.Failed(t.javaClass.simpleName + (t.message?.let { ": $it" } ?: ""))
+            var outcome = attempt(plain)
+            if (outcome is Outcome.Failed && !pngInput && !plain) {
+                // A raw frame is not an image file: without a PNG there is no capture. Once more, plain.
+                note("capture levels $id failed (${outcome.reason}) -> encoding without processing")
+                outcome = attempt(true)
             }
             val secs = (SystemClock.elapsedRealtime() - started) / 1000.0
-            val sat = if (saturation > 0) "sat+$saturation%" else "sat off"
+            val timing = (if (screencapMs >= 0) "screencap ${fmt(screencapMs / 1000.0)} s, " else "") + "processing ${fmt(secs)} s" +
+                (if (pngInput) " (png input)" else "")
             val line = when (outcome) {
-                is Outcome.Encoded -> "capture levels $id ${if (outcome.expanded) "limited" else "full"} ${fmtLevels(outcome.levels)}" +
-                    " -> ${if (outcome.expanded) "expanded 16-235 to 0-255" else "levels unchanged"}, $sat in ${fmt(secs)} s"
-                is Outcome.Unchanged -> "capture levels $id full ${fmtLevels(outcome.levels)}" +
-                    " -> unchanged, $sat (${fmt(secs)} s)"
-                is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> left as captured, $sat not applied"
+                is Outcome.Encoded -> {
+                    val sat = if (outcome.saturation > 0) "sat+${outcome.saturation}%" else "sat off"
+                    if (outcome.levels.samples == 0L) "capture levels $id -> encoded without processing, $sat; $timing"
+                    else "capture levels $id ${if (outcome.expanded) "limited" else "full"} ${fmtLevels(outcome.levels)}" +
+                        " -> ${if (outcome.expanded) "expanded 16-235 to 0-255" else "levels unchanged"}, $sat; $timing"
+                }
+                is Outcome.Unchanged -> "capture levels $id full ${fmtLevels(outcome.levels)} -> unchanged, sat off; $timing"
+                is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> " +
+                    (if (pngInput) "left as captured" else "dropped") + ", sat+$saturation% not applied; $timing"
             }
-            Log.i(TAG, line)
-            Diagnostics.record(TAG, line)
+            note(line)
+
+            if (outcome is Outcome.Failed && !pngInput) {
+                drop(queueDir, id, raw, "no PNG could be written")
+                return false
+            }
 
             // Into <id>.json before the PNG appears, so the upload carries it.
             CaptureStore.addLevels(queueDir, id, when (outcome) {
                 // saturation: the boost actually applied, in percent (0 when off or not applied)
-                is Outcome.Encoded -> levelsJson(outcome.levels).put("expanded", outcome.expanded).put("saturation", saturation)
+                is Outcome.Encoded -> levelsJson(outcome.levels).put("expanded", outcome.expanded).put("saturation", outcome.saturation)
                 is Outcome.Unchanged -> levelsJson(outcome.levels).put("expanded", false).put("saturation", 0)
                 is Outcome.Failed -> JSONObject().put("expanded", false).put("saturation", 0).put("error", outcome.reason.take(120))
             })
@@ -174,7 +227,7 @@ object CaptureLevels {
                     Log.w(TAG, "could not publish processed $id")
                     out.delete()
                 }
-                moved || publish(raw, png, rawMtime)
+                moved || (pngInput && publish(raw, png, rawMtime))
             } else {
                 out.delete()
                 publish(raw, png, rawMtime)
@@ -238,16 +291,92 @@ object CaptureLevels {
     }
 
     /**
-     * Decodes once, measures, and when the levels are limited and/or [saturation] is above 0,
-     * applies both in one row-batched pass and writes the PNG to [out] (complete before this
-     * returns). Holds [CaptureStore.decodeLock] throughout, so the uploader's preview decode never
-     * runs alongside it.
+     * Reads [src] (a raw frame, or a PNG when [pngInput]), measures it, applies levels and the
+     * boost in one row-batched pass (neither when [plain]) and writes the PNG to [out] (complete
+     * before this returns). Holds [CaptureStore.decodeLock] throughout, so the uploader's preview
+     * decode never runs alongside it.
      */
-    private fun processInto(src: File, out: File, saturation: Int): Outcome {
-        return synchronized(CaptureStore.decodeLock) { processLocked(src, out, saturation) }
+    private fun processInto(src: File, out: File, saturation: Int, plain: Boolean, pngInput: Boolean): Outcome {
+        return synchronized(CaptureStore.decodeLock) {
+            if (pngInput) processPngLocked(src, out, if (plain) 0 else saturation, plain) else processRawLocked(src, out, saturation, plain)
+        }
     }
 
-    private fun processLocked(src: File, out: File, saturation: Int): Outcome {
+    /** No samples: a plain pass, nothing measured. */
+    private val NOT_MEASURED = LevelsMath.Levels(-1, -1, -1, 0)
+
+    private fun processRawLocked(src: File, out: File, saturation: Int, plain: Boolean): Outcome {
+        val hdr = when (val c = RawFrame.check(src)) {
+            is RawFrame.Check.Ok -> c.header
+            is RawFrame.Check.Bad -> return Outcome.Failed("raw frame: ${c.reason}")
+        }
+        val w = hdr.width
+        val h = hdr.height
+        val rowBytes = hdr.rowBytes
+        return RandomAccessFile(src, "r").use { raf ->
+            val bytes = ByteArray(rowBytes * BAND_ROWS)
+            val px = IntArray(w * BAND_ROWS)
+            // Measure first, from every 8th row (an eighth of the file), so the one pass below
+            // can apply the decision.
+            val levels = if (plain) NOT_MEASURED else {
+                val hist = IntArray(256)
+                var y = 0
+                while (y < h) {
+                    raf.seek(hdr.offset + y.toLong() * rowBytes)
+                    raf.readFully(bytes, 0, rowBytes)
+                    RawFrame.toArgb(bytes, 0, px, 0, w)
+                    LevelsMath.sampleRow(px, w, hist)
+                    y += LevelsMath.SAMPLE_STEP
+                }
+                LevelsMath.measure(hist)
+            }
+            val expand = !plain && levels.limited
+            val sat = if (plain) 0 else saturation
+            val lut = if (expand) LevelsMath.EXPAND_LUT else null
+
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            try {
+                raf.seek(hdr.offset.toLong())
+                var alphaAnd = 0xFF
+                var y0 = 0
+                while (y0 < h) {
+                    val rows = minOf(BAND_ROWS, h - y0)
+                    raf.readFully(bytes, 0, rows * rowBytes)
+                    RawFrame.toArgb(bytes, 0, px, 0, w * rows)
+                    alphaAnd = alphaAnd and LevelsMath.process(px, w * rows, lut, sat)
+                    bmp.setPixels(px, 0, w, 0, y0, w, rows)
+                    y0 += rows
+                }
+                encode(bmp, alphaAnd, out)?.let { return it }
+                return Outcome.Encoded(levels, expand, sat)
+            } catch (t: Throwable) {
+                out.delete()
+                throw t
+            } finally {
+                bmp.recycle()
+            }
+        }
+    }
+
+    /** Writes [bmp] as PNG to [out]; null on success, else the failure. */
+    private fun encode(bmp: Bitmap, alphaAnd: Int, out: File): Outcome.Failed? {
+        // screencap frames are opaque: an RGB PNG is a quarter smaller and quicker to encode.
+        if (alphaAnd == 0xFF) bmp.setHasAlpha(false)
+        out.delete()
+        FileOutputStream(out).use { fos ->
+            val bos = BufferedOutputStream(fos, IO_BUFFER)
+            if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, bos)) throw IOException("PNG encode failed")
+            bos.flush()
+            fos.fd.sync()
+        }
+        if (!CaptureStore.isCompletePng(out)) {
+            out.delete()
+            return Outcome.Failed("re-encoded PNG incomplete")
+        }
+        return null
+    }
+
+    private fun processPngLocked(src: File, out: File, saturation: Int, plain: Boolean): Outcome {
         val opts = BitmapFactory.Options().apply {
             inMutable = true
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -258,6 +387,7 @@ object CaptureLevels {
             val h = bmp.height
             if (w <= 0 || h <= 0) return Outcome.Failed("empty image")
             if (!bmp.isMutable) return Outcome.Failed("bitmap not mutable")
+            if (plain) return Outcome.Unchanged(NOT_MEASURED)
 
             val buf = IntArray(w * BAND_ROWS)
             val hist = IntArray(256)
@@ -281,21 +411,8 @@ object CaptureLevels {
                 bmp.setPixels(buf, 0, w, 0, y0, w, rows)
                 y0 += rows
             }
-            // screencap frames are opaque: an RGB PNG is a quarter smaller and quicker to encode.
-            if (alphaAnd == 0xFF) bmp.setHasAlpha(false)
-
-            out.delete()
-            FileOutputStream(out).use { fos ->
-                val bos = BufferedOutputStream(fos, IO_BUFFER)
-                if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, bos)) throw IOException("PNG encode failed")
-                bos.flush()
-                fos.fd.sync()
-            }
-            if (!CaptureStore.isCompletePng(out)) {
-                out.delete()
-                return Outcome.Failed("re-encoded PNG incomplete")
-            }
-            return Outcome.Encoded(levels, expand)
+            encode(bmp, alphaAnd, out)?.let { return it }
+            return Outcome.Encoded(levels, expand, saturation)
         } catch (t: Throwable) {
             out.delete()
             throw t

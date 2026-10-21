@@ -20,6 +20,13 @@ object CaptureStore {
     const val TMP_PREFIX = "tmp_"
     /** A finished screencap waiting for [CaptureLevels]; becomes `<id>.png` once processed. */
     const val RAW_SUFFIX = ".raw"
+    /**
+     * Raw frames (~33 MB at 4K) waiting for [CaptureLevels]; past [MAX_RAW_BACKLOG] a new
+     * capture is taken as a PNG instead, so the queue never holds more than a few.
+     */
+    const val MAX_RAW_BACKLOG = 3
+    fun rawBacklog(queueDir: File): Int = queueDir.listFiles { f: File -> f.name.endsWith(RAW_SUFFIX) }?.size ?: 0
+
     /** Present while [CaptureLevels] decodes `<id>.raw`; left behind only if the process died. */
     const val TRY_SUFFIX = ".lvtry"
 

@@ -8,6 +8,7 @@ import com.steamcontroller.android.BuildConfig
  *
  * - `mkdir -p` / `screencap -p` inside the screenshots directory (SystemActions)
  * - `screencap -p` into the app's own Gamehub upload queue (Android/data/<app>/files/captures)
+ * - `screencap <file>.raw` (the raw framebuffer, no PNG encode) into the same two directories
  * - `settings get|put|delete secure show_ime_with_hard_keyboard` (UInputGamepad)
  * - `cmd deviceidle whitelist +<this app>` so Android may restart the service after a kill
  * - `appops set <this app> SYSTEM_ALERT_WINDOW allow` so the status pill can draw above games
@@ -37,6 +38,7 @@ internal object ShellAllowlist {
     private const val IME_SETTING = "show_ime_with_hard_keyboard"
 
     private val SCREENSHOT_FILE = Regex("""[A-Za-z0-9_\-]+\.png""")
+    private val RAW_FILE = Regex("""[A-Za-z0-9_\-]+\.raw""")
 
     // The app's external files dir as the shell user sees it; both spellings resolve to it.
     private val CAPTURE_DIRS = listOf(
@@ -66,6 +68,10 @@ internal object ShellAllowlist {
                 isScreenshotPath(args[2])
             }
 
+            args.size == 2 && args[0] == "screencap" -> {
+                isCapturePath(args[1], RAW_FILE)
+            }
+
             args == listOf("cmd", "deviceidle", "whitelist", "+${BuildConfig.APPLICATION_ID}") -> {
                 true
             }
@@ -88,9 +94,11 @@ internal object ShellAllowlist {
         }
     }
 
-    private fun isScreenshotPath(path: String): Boolean =
+    private fun isScreenshotPath(path: String): Boolean = isCapturePath(path, SCREENSHOT_FILE)
+
+    internal fun isCapturePath(path: String, file: Regex): Boolean =
         (CAPTURE_DIRS + SCREENSHOT_DIR).any { dir ->
             val prefix = "$dir/"
-            path.startsWith(prefix) && SCREENSHOT_FILE.matches(path.removePrefix(prefix))
+            path.startsWith(prefix) && file.matches(path.removePrefix(prefix))
         }
 }
