@@ -363,19 +363,22 @@ class HomePage(host: Host) : Page(host) {
         heroIndex = i
         paintDots()
         val back = if (heroFront === heroA) heroB else heroA
-        val spec = Img.Spec(screenW)
+        val spec = heroSpec
         // The hero's preview jumps every queue; it never waits on an original or on thumbnails.
-        Img.into(back, shot.previewUrl, spec, fade = false, urgent = true) { _ ->
+        Img.into(back, shot.previewUrl, spec, fade = false, urgent = true, full = shot.fullUrl) { _ ->
             if (heroList.getOrNull(heroIndex)?.id != shot.id || back.drawable == null) return@into
             HomeTiming.mark("hero-image")
             // The incoming image goes directly above the outgoing one, still under the scrims.
             heroLayer.removeView(back)
             heroLayer.addView(back, 1, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             drift?.cancel()
+            drift = null
             back.scaleX = 1f; back.scaleY = 1f
             back.alpha = if (animate) 0f else 1f
             back.animate().alpha(1f).setDuration(if (animate) 900L else 1L).setInterpolator(DecelerateInterpolator()).start()
-            // A slow drift while it is on screen.
+            heroFront = back
+            // A slow drift while it is on screen, only with Slow zoom on (off by default).
+            if (!TvPrefs.slowZoom(ctx)) return@into
             drift = android.animation.ObjectAnimator.ofPropertyValuesHolder(back,
                 android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.04f),
                 android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.04f)).apply {
@@ -383,7 +386,6 @@ class HomePage(host: Host) : Page(host) {
                 interpolator = LinearInterpolator()
                 start()
             }
-            heroFront = back
         }
         val fill = {
             eyebrow.setTextColor(C.text2)
@@ -420,8 +422,11 @@ class HomePage(host: Host) : Page(host) {
         }
     }
 
+    /** Full screen, CENTER_CROP: an ultrawide capture is sized by the screen's height. */
+    private val heroSpec = Img.coverPx(screenW, screenH)
+
     private fun prefetchHero() {
-        val spec = Img.Spec(screenW)
+        val spec = heroSpec
         heroList.getOrNull((heroIndex + 1) % heroList.size.coerceAtLeast(1))?.let { Img.prefetch(it.previewUrl, spec) }
     }
 
@@ -604,11 +609,12 @@ class HomePage(host: Host) : Page(host) {
                 outRect.right = gap
             }
         })
-        val spec = Img.Spec(ctx.px(wDp))
+        // The card's real pixels at the 85 % density, at its focused size (Tile scales 1.05).
+        val spec = Img.cover(ctx, wDp, kind.h, Tile.FOCUS_SCALE)
         if (r.shots.isNotEmpty()) {
             list.adapter = SimpleAdapter(r.shots, { Tile(ctx, kind.w, kind.h, captionOnFocus = true) }) { view, shot, i ->
                 val t = view as Tile
-                Img.into(t.image, shot.previewUrl, spec) { b -> if (b != null) HomeTiming.mark("first-row-image") }
+                Img.into(t.image, shot.previewUrl, spec, full = shot.fullUrl) { b -> if (b != null) HomeTiming.mark("first-row-image") }
                 t.setFavorite(shot.favorite)
                 t.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot) + "  ·  " + Fmt.time(shot))
                 t.card.holdItem(HoldItem(shot, v.row.collection?.let { CollRef(it, v.row.title) }, v.row.shots))
@@ -665,7 +671,8 @@ class HomePage(host: Host) : Page(host) {
         when (kind) {
             TileKind.GAME -> {
                 val grid = c.art?.grid
-                Img.into(t.image, grid ?: c.cover?.previewUrl, if (grid != null) spec else Img.Spec(ctx.px(kind.h * 16 / 9)))
+                // A cover spec: a 16:9 capture in the 2:3 card is sized by its height.
+                Img.into(t.image, grid ?: c.cover?.previewUrl, spec)
                 t.setOver(if (grid == null) c.title else null)
                 t.setCaption(if (grid == null) null else c.title, Fmt.count(c.count))
             }
@@ -836,7 +843,7 @@ class NowPlayingCard(ctx: Context) : FrameLayout(ctx) {
         game = np.game
         name.text = np.game
         val heroUrl = np.art?.hero ?: np.art?.grid
-        Img.into(art, heroUrl, Img.Spec(dp(W)))
+        Img.into(art, heroUrl, Img.cover(context, W, H, 1.04f))
         val logoUrl = np.art?.logo
         if (logoUrl != null) {
             logo.visibility = VISIBLE

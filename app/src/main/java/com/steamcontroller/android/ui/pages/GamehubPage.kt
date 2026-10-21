@@ -36,6 +36,8 @@ class GamehubPage(host: Host) : Page(host) {
     private val wide = ctx.isWide()
     private val linkCard = Kit.card(ctx, 22)
     private val bootCard = Kit.card(ctx, 22)
+    private val tvCard = Kit.card(ctx, 22)
+    private lateinit var zoomRow: ToggleRow
     private val testResult = Kit.body(ctx, ctx.getString(R.string.hub_test_hint), 13f, C.text2)
     private var focusFirst: View? = null
     private var refreshedAt = 0L
@@ -47,16 +49,21 @@ class GamehubPage(host: Host) : Page(host) {
 
     private fun build(): View {
         buildBoot()
+        buildTv()
         val content: View = if (wide) {
             Kit.row(ctx, Gravity.TOP).apply {
                 addView(linkCard, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.15f))
                 addView(Kit.space(ctx, 16))
-                addView(bootCard, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(Kit.column(ctx).apply {
+                    addView(bootCard)
+                    addView(tvCard, Kit.lp(t = 16, ctx = ctx))
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             }
         } else {
             Kit.column(ctx).apply {
                 addView(linkCard)
                 addView(bootCard, Kit.lp(t = 8, ctx = ctx))
+                addView(tvCard, Kit.lp(t = 8, ctx = ctx))
             }
         }
         return ScrollView(ctx).apply {
@@ -66,8 +73,8 @@ class GamehubPage(host: Host) : Page(host) {
         }
     }
 
-    override fun refresh() { linkedShown = null; renderLink() }
-    override fun onShow() = renderLink()
+    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh() }
+    override fun onShow() { renderLink(); zoomRow.refresh() }
 
     override fun onFrame(f: LiveFrame) {
         val now = android.os.SystemClock.uptimeMillis()
@@ -208,6 +215,14 @@ class GamehubPage(host: Host) : Page(host) {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    /** Show mode and the screensaver on this TV. */
+    private fun buildTv() {
+        tvCard.addView(Kit.label(ctx, ctx.getString(R.string.hub_tv)))
+        zoomRow = ToggleRow(ctx, ctx.getString(R.string.hub_slow_zoom), ctx.getString(R.string.hub_slow_zoom_hint),
+            { com.steamcontroller.android.ui.tv.TvPrefs.slowZoom(ctx) }, { com.steamcontroller.android.ui.tv.TvPrefs.setSlowZoom(ctx, it) })
+        tvCard.addView(zoomRow, Kit.lp(t = 10, ctx = ctx))
     }
 
     private fun buildBoot() {

@@ -3,9 +3,12 @@ package com.steamcontroller.android.ui.tv
 import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
+import android.graphics.Color
+import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -30,8 +33,11 @@ import com.steamcontroller.android.hub.GamehubTv.Shot
 import com.steamcontroller.android.ui.pill.Pill
 import com.steamcontroller.android.ui.theme.C
 import com.steamcontroller.android.ui.theme.Motion
+import com.steamcontroller.android.ui.theme.Type
 import com.steamcontroller.android.ui.theme.dp
-import com.steamcontroller.android.ui.theme.surface
+import com.steamcontroller.android.ui.tv.ShowKeys.Act
+import com.steamcontroller.android.ui.tv.ShowKeys.Ctl
+import com.steamcontroller.android.ui.tv.ShowKeys.Stage
 import com.steamcontroller.android.ui.widget.Kit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,17 +47,20 @@ import kotlinx.coroutines.withContext
 /**
  * Show mode: full-screen originals for guests, from any row, game, album, person or session.
  *
- *  - ←/→ step, A pauses (there is no progress bar: a pause state and an interval are enough)
- *  - the caption (logo or name, date, people) fades out after a few seconds and stays put while
- *    consecutive captures are from the same game
+ *  - pictures at native fit: contained, centred, never scaled past the screen and still unless
+ *    "Slow zoom" is switched on (off by default; [TvPrefs.slowZoom])
+ *  - the game's official logo small in the bottom-right corner the whole time (its name in
+ *    condensed capitals when there is no logo); it changes only when the game does
+ *  - the caption (date, people, favourite) fades out after a few seconds
+ *  - OK or Play/Pause: a small control bar (previous, play/pause, next, time per picture,
+ *    favourite, slow zoom), D-pad driven, hiding after 5 s while playing and staying while paused
  *  - ↓ a filmstrip of small thumbnails to jump in time, ↓ again a grid of larger ones;
- *    ↑ or B steps back out
- *  - ↑ or B one step back (grid → filmstrip → picture → close), LB/RB step like ←/→
- *  - Menu/Start the options (play/pause, time per picture, Ken Burns); +/− time per picture
- *  - LT/RT the previous/next collection, Y favourite at any stage
+ *    ↑ or B one step back (grid → filmstrip → picture → close), LB/RB step like ←/→
+ *  - LT/RT the previous/next collection, Y favourite at any stage, +/− time per picture
  *
- * Selection inside the filmstrip and grid is drawn by hand rather than with Android focus, so
- * nothing here can lose or trap focus. The screen stays awake while it plays.
+ * Key routing lives in [ShowKeys] (tested). Selection in the bar, filmstrip and grid is drawn by
+ * hand rather than with Android focus, so nothing here can lose or trap focus. The screen stays
+ * awake while it plays.
  */
 class ShowMode(
     private val act: AppCompatActivity,
@@ -61,15 +70,13 @@ class ShowMode(
     private val onChanged: (HoldItem, Boolean) -> Unit,
     private val onClose: () -> Unit,
 ) {
-    private enum class Stage { NORMAL, STRIP, GRID, OPTIONS }
-
     private val ctx = act
     private val dm = ctx.resources.displayMetrics
     private val screenW = dm.widthPixels
     private val screenH = dm.heightPixels
     private val safeH = ctx.resources.getDimensionPixelSize(R.dimen.safe_h)
     private val safeV = ctx.resources.getDimensionPixelSize(R.dimen.safe_v)
-    /** Previews decode at the UI surface's width (1920 on a Shield); nothing larger is held. */
+    /** Previews decode at the UI surface's size (1920 × 1080 on a Shield); nothing larger is held. */
     private val full = Img.Spec(screenW)
     private val originalSpec = Img.Spec(screenW, original = true)
     private val handler = Handler(Looper.getMainLooper())
@@ -82,18 +89,31 @@ class ShowMode(
     private var front = imgA
     private val bottomScrim = View(ctx)
     private val caption = LinearLayout(ctx)
-    private val capLogo = ImageView(ctx)
-    private val capTitle = Kit.title(ctx, "", 34f)
     private val capMeta = Kit.body(ctx, "", 17f, C.text2)
     private val capHeart = ImageView(ctx)
     private val hud = LinearLayout(ctx)
     private val hudState = Kit.label(ctx, "", 12f, C.text)
-    private val hudCount = Kit.value(ctx, "", 13f, C.text2)
     private val collCard = LinearLayout(ctx)
     private val collEyebrow = Kit.label(ctx, "", 11f, C.text3)
     private val collTitle = Kit.title(ctx, "", 28f)
     private val heart = ImageView(ctx)
     private val message = Kit.body(ctx, "", 18f, C.text2)
+
+    // The game's logo in the corner.
+    private val logoBox = FrameLayout(ctx)
+    private val logoShade = View(ctx)
+    private val logoShadow = ImageView(ctx)
+    private val logoImg = ImageView(ctx)
+    private val logoName = Kit.label(ctx, "", 15f, C.text)
+    private var logoGame: String? = null
+    private var logoToken = 0
+
+    // The control bar.
+    private val bar = LinearLayout(ctx)
+    private val barCount = Kit.value(ctx, "", 13f, C.text3)
+    private val ctlViews = LinkedHashMap<Ctl, BarButton>()
+    private var barSel = ShowKeys.DEFAULT_CTL
+    private var lastInput = 0L
 
     private val stripPanel = FrameLayout(ctx)
     private val stripInfo = Kit.label(ctx, "", 12f, C.text)
@@ -101,10 +121,6 @@ class ShowMode(
     private val gridPanel = FrameLayout(ctx)
     private val gridInfo = Kit.label(ctx, "", 12f, C.text)
     private val grid = RecyclerView(ctx)
-    private val options = LinearLayout(ctx)
-    private val optRows = ArrayList<LinearLayout>()
-    private val optKeys = ArrayList<TextView>()
-    private val optVals = ArrayList<TextView>()
 
     private var colls = req.siblings
     private var collIndex = req.index.coerceIn(0, (req.siblings.size - 1).coerceAtLeast(0))
@@ -113,14 +129,12 @@ class ShowMode(
     private var loadingMore = false
     private var index = 0
     private var sel = 0
-    private var optSel = 0
-    private var stage = Stage.NORMAL
+    private var stage = Stage.PICTURE
     private var playing = true
     private val calm = req.calm
     /** The screensaver: any input closes it, and the waking input goes nowhere else. */
     val isCalm: Boolean get() = calm && !closed
     private var interval = req.intervalSec?.coerceIn(3, 600) ?: TvPrefs.interval(ctx)
-    private var captionGame: String? = null
     private var captionShown = false
     private var collToken = 0
     private var imgToken = 0
@@ -133,6 +147,8 @@ class ShowMode(
     private val gridCols = 5
     private val gridW = 160
     private val gridH = 90
+    /** A selected thumbnail grows to this; it is decoded for that size. */
+    private val thumbScale = 1.1f
 
     // ── build ─────────────────────────────────────────────────────────────────────────
 
@@ -145,6 +161,7 @@ class ShowMode(
         root.addView(backdrop, match())
         root.addView(View(ctx).apply { setBackgroundColor(C.alpha(0xFF000000.toInt(), 0.45f)) }, match())
         for (iv in listOf(imgA, imgB)) {
+            // Native fit: contained and centred, never cropped or zoomed past the screen.
             iv.scaleType = ImageView.ScaleType.FIT_CENTER
             layers.addView(iv, match())
         }
@@ -154,32 +171,27 @@ class ShowMode(
         bottomScrim.alpha = 0f
         root.addView(bottomScrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (screenH * 0.42f).toInt(), Gravity.BOTTOM))
 
-        caption.orientation = LinearLayout.VERTICAL
+        buildLogo()
+
+        caption.orientation = LinearLayout.HORIZONTAL
+        caption.gravity = Gravity.CENTER_VERTICAL
         caption.alpha = 0f
-        capLogo.scaleType = ImageView.ScaleType.FIT_START
-        caption.addView(capLogo, LinearLayout.LayoutParams(ctx.dp(340), ctx.dp(92)))
-        capTitle.maxLines = 2
-        capTitle.setShadowLayer(ctx.dp(10f), 0f, 0f, 0x99000000.toInt())
-        caption.addView(capTitle, LinearLayout.LayoutParams(ctx.dp(620), ViewGroup.LayoutParams.WRAP_CONTENT))
-        val metaRow = Kit.row(ctx)
         capHeart.setImageResource(R.drawable.ic_heart_fill)
         capHeart.visibility = View.GONE
-        metaRow.addView(capHeart, LinearLayout.LayoutParams(ctx.dp(18), ctx.dp(18)).apply { marginEnd = ctx.dp(8) })
+        caption.addView(capHeart, LinearLayout.LayoutParams(ctx.dp(18), ctx.dp(18)).apply { marginEnd = ctx.dp(8) })
         capMeta.maxLines = 1
         capMeta.setShadowLayer(ctx.dp(8f), 0f, 0f, 0x99000000.toInt())
-        metaRow.addView(capMeta)
-        caption.addView(metaRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(10) })
+        caption.addView(capMeta)
         root.addView(caption, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START).apply {
-            marginStart = safeH; bottomMargin = safeV + ctx.dp(10)
+            marginStart = safeH; bottomMargin = safeV + ctx.dp(14)
         })
 
-        // Top right: only while paused or just after a step.
+        // Top right: only while paused (and the bar is not up) or just after a change.
         hud.orientation = LinearLayout.HORIZONTAL
         hud.gravity = Gravity.CENTER_VERTICAL
         hud.setPadding(ctx.dp(16), 0, ctx.dp(16), 0)
         hud.background = android.graphics.drawable.GradientDrawable().apply { setColor(C.alpha(C.bg, 0.72f)); cornerRadius = ctx.dp(20f); setStroke(ctx.dp(1), C.alpha(C.text, 0.08f)) }
         hud.addView(hudState)
-        hud.addView(hudCount, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(12) })
         hud.alpha = 0f
         root.addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ctx.dp(40), Gravity.TOP or Gravity.END).apply { marginEnd = safeH; topMargin = safeV })
 
@@ -198,12 +210,68 @@ class ShowMode(
         message.visibility = View.GONE
         root.addView(message, FrameLayout.LayoutParams(ctx.dp(560), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
 
+        buildBar()
         buildStrip()
         buildGrid()
-        buildOptions()
     }
 
     private fun match() = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+
+    /**
+     * Bottom right, inside the safe area: a faint corner shade so a bright picture never swallows
+     * it, the logo with a soft dark copy 1.5dp below it as its shadow, or the name in condensed caps.
+     */
+    private fun buildLogo() {
+        logoShade.background = CornerShade(C.alpha(0xFF000000.toInt(), 0.42f))
+        logoShade.alpha = 0f
+        root.addView(logoShade, FrameLayout.LayoutParams(ctx.dp(LOGO_W + 260), ctx.dp(LOGO_H + 150), Gravity.BOTTOM or Gravity.END))
+        for (iv in listOf(logoShadow, logoImg)) {
+            iv.scaleType = ImageView.ScaleType.FIT_END
+            logoBox.addView(iv, FrameLayout.LayoutParams(ctx.dp(LOGO_W), ctx.dp(LOGO_H), Gravity.BOTTOM or Gravity.END))
+        }
+        logoShadow.setColorFilter(Color.BLACK, PorterDuff.Mode.SRC_IN)
+        logoShadow.alpha = 0.55f
+        logoShadow.translationY = ctx.dp(1.5f)
+        logoShadow.translationX = ctx.dp(0.5f)
+        logoName.gravity = Gravity.END
+        logoName.typeface = Type.condensedBold(ctx)
+        logoName.letterSpacing = 0.08f
+        logoName.setShadowLayer(ctx.dp(6f), 0f, ctx.dp(1f), 0xB3000000.toInt())
+        logoName.visibility = View.GONE
+        logoBox.addView(logoName, FrameLayout.LayoutParams(ctx.dp(LOGO_W + 80), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
+        logoBox.alpha = 0f
+        root.addView(logoBox, FrameLayout.LayoutParams(ctx.dp(LOGO_W + 80), ctx.dp(LOGO_H), Gravity.BOTTOM or Gravity.END).apply {
+            marginEnd = safeH; bottomMargin = safeV + ctx.dp(8)
+        })
+    }
+
+    private fun buildBar() {
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.clipChildren = false
+        bar.clipToPadding = false
+        bar.setPadding(ctx.dp(18), ctx.dp(6), ctx.dp(10), ctx.dp(6))
+        bar.background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(C.alpha(C.sheet, 0.92f)); cornerRadius = ctx.dp(34f); setStroke(ctx.dp(1), C.alpha(C.text, 0.08f))
+        }
+        barCount.minWidth = ctx.dp(72)
+        bar.addView(barCount, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(6) })
+        fun add(c: Ctl, b: BarButton, gapBefore: Int = 4) {
+            ctlViews[c] = b
+            bar.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(gapBefore) })
+        }
+        add(Ctl.PREV, BarButton(ctx, R.drawable.ic_prev, 48, 22))
+        add(Ctl.PLAY, BarButton(ctx, R.drawable.ic_pause, 56, 26))
+        add(Ctl.NEXT, BarButton(ctx, R.drawable.ic_next, 48, 22))
+        bar.addView(View(ctx).apply { setBackgroundColor(C.lineStrong) }, LinearLayout.LayoutParams(ctx.dp(1), ctx.dp(28)).apply { marginStart = ctx.dp(12); marginEnd = ctx.dp(8) })
+        add(Ctl.TIMER, BarButton(ctx, R.drawable.ic_timer, 48, 18, withText = true))
+        add(Ctl.FAV, BarButton(ctx, R.drawable.ic_heart, 48, 22))
+        add(Ctl.ZOOM, BarButton(ctx, R.drawable.ic_zoom, 48, 18, withText = true))
+        bar.visibility = View.GONE
+        root.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = safeV + ctx.dp(6)
+        })
+    }
 
     private fun buildStrip() {
         val h = ctx.dp(stripH + 6 + 64) + safeV
@@ -221,10 +289,10 @@ class ShowMode(
         strip.setPadding(side, ctx.dp(8), side, ctx.dp(8))
         strip.layoutManager = LinearLayoutManager(ctx, RecyclerView.HORIZONTAL, false)
         strip.addItemDecoration(gap(ctx.dp(8), horizontalOnly = true))
-        val spec = Img.Spec(ctx.px(stripW))
+        val spec = Img.cover(ctx, stripW, stripH, thumbScale)
         strip.adapter = SimpleAdapter(items, { Thumb(ctx, stripW, stripH) }) { v, shot, i ->
             val t = v as Thumb
-            Img.into(t.image, shot.previewUrl, spec)
+            Img.into(t.image, shot.previewUrl, spec, full = shot.fullUrl)
             t.setState(i == sel, shot.favorite)
             if (i >= items.size - 6) loadMore()
         }
@@ -254,10 +322,10 @@ class ShowMode(
                 outRect.bottom = ctx.dp(14)
             }
         })
-        val spec = Img.Spec(ctx.px(gridW))
+        val spec = Img.cover(ctx, gridW, gridH, thumbScale)
         grid.adapter = SimpleAdapter(items, { Thumb(ctx, gridW, gridH) }) { v, shot, i ->
             val t = v as Thumb
-            Img.into(t.image, shot.previewUrl, spec)
+            Img.into(t.image, shot.previewUrl, spec, full = shot.fullUrl)
             t.setState(i == sel, shot.favorite)
             if (i >= items.size - 10) loadMore()
         }
@@ -273,29 +341,6 @@ class ShowMode(
         }
     }
 
-    private fun buildOptions() {
-        options.orientation = LinearLayout.VERTICAL
-        options.setPadding(ctx.dp(8), ctx.dp(8), ctx.dp(8), ctx.dp(8))
-        options.background = android.graphics.drawable.GradientDrawable().apply { setColor(C.alpha(C.sheet, 0.94f)); cornerRadius = ctx.dp(12f); setStroke(ctx.dp(1), C.line) }
-        options.addView(Kit.label(ctx, ctx.getString(R.string.show_options), 11f, C.text3), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(ctx.dp(14), ctx.dp(8), 0, ctx.dp(8)) })
-        repeat(3) {
-            val row = Kit.row(ctx)
-            row.minimumHeight = ctx.dp(44)
-            row.setPadding(ctx.dp(17), 0, ctx.dp(17), 0)
-            row.surface(radiusDp = 8f, fill = 0, stroke = 0)
-            val key = Kit.body(ctx, "", 16f, C.text, medium = true)
-            val value = Kit.value(ctx, "", 16f, C.text2)
-            row.addView(key, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(value)
-            optKeys.add(key); optVals.add(value)
-            optRows.add(row)
-            options.addView(row, LinearLayout.LayoutParams(ctx.dp(300), ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        options.addView(Kit.label(ctx, ctx.getString(R.string.show_options_keys), 10.5f, C.text3), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(ctx.dp(14), ctx.dp(8), 0, ctx.dp(6)) })
-        options.visibility = View.GONE
-        root.addView(options, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { marginEnd = safeH; topMargin = safeV + ctx.dp(52) })
-    }
-
     // ── lifecycle ─────────────────────────────────────────────────────────────────────
 
     fun start() {
@@ -304,6 +349,18 @@ class ShowMode(
         root.requestFocus()
         openColl(collIndex, req.startShotId, req.preload, req.preloadNext, announce = false)
         setKeepOn()
+        if (!calm && GameArt.isEmpty) learnLogos()
+    }
+
+    /** Logos come from the games list; read the saved one (or ask the hub) off the main thread. */
+    private fun learnLogos() {
+        act.lifecycleScope.launch {
+            val list = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "games") ?: GamehubTv.games(ctx).valueOrNull() }
+            if (closed || list == null) return@launch
+            GameArt.putAll(list)
+            logoGame = null
+            items.getOrNull(index)?.let { updateLogo(it) }
+        }
     }
 
     fun close() {
@@ -325,9 +382,10 @@ class ShowMode(
     fun releaseImages() {
         released = true
         imgToken++
+        logoToken++
         kb?.cancel()
-        for (iv in listOf(imgA, imgB, backdrop, capLogo)) Img.release(iv)
-        captionGame = null
+        for (iv in listOf(imgA, imgB, backdrop, logoImg, logoShadow)) Img.release(iv)
+        logoGame = null
         for (rv in listOf(strip, grid)) {
             for (k in 0 until rv.childCount) (rv.getChildAt(k) as? Thumb)?.let { Img.release(it.image) }
             rv.recycledViewPool.clear()
@@ -342,7 +400,7 @@ class ShowMode(
 
     /** Activity paused: stop the clock, keep the place. */
     fun pause() {
-        if (playing) setPlaying(false, announce = false)
+        if (playing) setPlaying(false)
     }
 
     private fun setKeepOn() {
@@ -361,7 +419,6 @@ class ShowMode(
         loadingMore = false
         items.clear()
         next = null
-        captionGame = null
         val initial: List<Shot>? = ref.items ?: preload
         if (initial != null && preload != null) next = preloadNext
         initial?.let { items.addAll(it) }
@@ -416,7 +473,7 @@ class ShowMode(
                     index = items.indexOfFirst { it.id == keep }.coerceAtLeast(0)
                     sel = index
                     refreshThumbs()
-                    if (!hadItems) { message.visibility = View.GONE; showCurrent(manual = false, fade = true) }
+                    if (!hadItems) { message.visibility = View.GONE; showCurrent(manual = false, fade = true) } else renderBar()
                 }
                 is GamehubTv.Res.Err -> if (items.isEmpty() && calm) close() else if (items.isEmpty()) showMessage(when (r.fail) {
                     GamehubTv.Fail.NOT_DEPLOYED -> ctx.getString(R.string.show_update)
@@ -428,7 +485,7 @@ class ShowMode(
 
     /** When the last page load failed (offline): no new attempt for a while, the show loops instead. */
     private var moreFailedAt = 0L
-    private fun moreBlocked() = moreFailedAt != 0L && android.os.SystemClock.uptimeMillis() - moreFailedAt < MORE_BACKOFF_MS
+    private fun moreBlocked() = moreFailedAt != 0L && SystemClock.uptimeMillis() - moreFailedAt < MORE_BACKOFF_MS
 
     private fun loadMore() {
         val cursor = next ?: return
@@ -440,7 +497,7 @@ class ShowMode(
             val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, coll, before = cursor) }
             if (token != collToken || closed) return@launch
             loadingMore = false
-            if (r is GamehubTv.Res.Err) moreFailedAt = android.os.SystemClock.uptimeMillis()
+            if (r is GamehubTv.Res.Err) moreFailedAt = SystemClock.uptimeMillis()
             if (r is GamehubTv.Res.Ok) {
                 moreFailedAt = 0L
                 val ids = items.mapTo(HashSet()) { it.id }
@@ -450,6 +507,7 @@ class ShowMode(
                 if (items.size > start) {
                     strip.adapter?.notifyItemRangeInserted(start, items.size - start)
                     grid.adapter?.notifyItemRangeInserted(start, items.size - start)
+                    renderBar()
                 }
             }
         }
@@ -458,7 +516,6 @@ class ShowMode(
     private fun switchColl(d: Int) {
         if (colls.size < 2) { nudge(d); return }
         val i = (collIndex + d + colls.size) % colls.size
-        if (stage == Stage.OPTIONS) setStage(Stage.NORMAL)
         openColl(i, null, null, null, announce = true)
     }
 
@@ -489,6 +546,7 @@ class ShowMode(
         imgA.setImageDrawable(null); imgB.setImageDrawable(null)
         backdrop.alpha = 0f
         caption.alpha = 0f; bottomScrim.alpha = 0f
+        logoBox.alpha = 0f; logoShade.alpha = 0f; logoGame = null
         refreshThumbs()
     }
 
@@ -509,7 +567,9 @@ class ShowMode(
             present(back, bmp, shot, token, if (calm) 1600L else if (manual) 280L else if (fade) 900L else 1L)
         }
         updateCaption(shot, manual)
-        updateHud(manual)
+        updateLogo(shot)
+        updateHud()
+        renderBar()
         prefetchAround()
         if (index >= items.size - 8) loadMore()
     }
@@ -538,15 +598,15 @@ class ShowMode(
         } else if (backdrop.alpha > 0f) {
             backdrop.animate().alpha(0f).setDuration(fadeMs.coerceAtLeast(200L)).start()
         }
-        // Then the original, swapped in place (same framing, sharper), but only when the preview
-        // (~1600 px) is smaller than the screen: on a 1080p UI surface it rarely is by much.
+        // Then the original, swapped in place (same framing, sharper), whenever the preview is
+        // narrower than the screen (device-api.md: use the full image then).
         if (preview.width < screenW * 0.97f && (shot.width == 0 || shot.width > preview.width)) {
             Img.load(shot.fullUrl, originalSpec) { orig ->
                 if (token != imgToken || orig == null || front !== back) return@load
                 back.setImageBitmap(orig)
             }
         }
-        if (playing) handler.postDelayed(advance, interval * 1000L)
+        if (playing && (stage == Stage.PICTURE || stage == Stage.BAR)) handler.postDelayed(advance, interval * 1000L)
     }
 
     private val advance: Runnable = object : Runnable {
@@ -571,10 +631,12 @@ class ShowMode(
         items.getOrNull(index - 1)?.let { Img.prefetch(it.previewUrl, full) }
     }
 
+    /** Slow zoom, only when switched on (show mode and the screensaver alike); else perfectly still. */
     private fun startKenBurns(v: ImageView) {
         kb?.cancel()
+        kb = null
         v.scaleX = 1f; v.scaleY = 1f; v.translationX = 0f; v.translationY = 0f
-        if (!calm && !TvPrefs.kenBurns(ctx)) return
+        if (!TvPrefs.slowZoom(ctx)) return
         val zoomIn = index % 2 == 0
         val s0 = if (zoomIn) 1f else 1.045f
         val s1 = if (zoomIn) 1.045f else 1f
@@ -592,62 +654,85 @@ class ShowMode(
         }
     }
 
-    // ── caption and HUD ───────────────────────────────────────────────────────────────
+    // ── logo, caption and HUD ─────────────────────────────────────────────────────────
+
+    /** The game's logo, changed (with a short crossfade) only when the game changes. */
+    private fun updateLogo(shot: Shot) {
+        if (calm) return
+        val game = shot.gameOrUnknown()
+        if (game == logoGame) return
+        logoGame = game
+        val token = ++logoToken
+        val url = shot.art?.logo ?: GameArt.get(shot.game)?.logo
+        val fill = {
+            logoName.text = game
+            if (url == null) {
+                Img.release(logoImg); Img.release(logoShadow)
+                logoName.visibility = View.VISIBLE
+                revealLogo()
+            } else {
+                logoName.visibility = View.GONE
+                val spec = Img.Spec(ctx.dp(LOGO_W), alpha = true)
+                Img.into(logoImg, url, spec, fade = false) { b ->
+                    if (token != logoToken) return@into
+                    if (b == null) {
+                        Img.release(logoShadow)
+                        logoName.visibility = View.VISIBLE
+                    } else {
+                        logoShadow.setImageBitmap(b)
+                    }
+                    revealLogo()
+                }
+            }
+        }
+        if (logoBox.alpha > 0.05f) {
+            logoBox.animate().cancel()
+            logoBox.animate().alpha(0f).setDuration(Motion.FAST).setInterpolator(AccelerateInterpolator()).withEndAction { if (token == logoToken) fill() }.start()
+        } else fill()
+    }
+
+    private fun logoVisible() = !calm && logoGame != null && (stage == Stage.PICTURE || stage == Stage.BAR) && message.visibility != View.VISIBLE
+
+    private fun revealLogo() {
+        val a = if (logoVisible()) 0.94f else 0f
+        logoBox.animate().cancel()
+        logoBox.animate().alpha(a).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
+        logoShade.animate().cancel()
+        logoShade.animate().alpha(if (a > 0f) 1f else 0f).setDuration(Motion.SLOW * 2).start()
+    }
 
     private fun updateCaption(shot: Shot, manual: Boolean) {
         if (calm) return
-        val game = shot.gameOrUnknown()
         capHeart.visibility = if (shot.favorite) View.VISIBLE else View.GONE
         val meta = Fmt.meta(shot)
-        if (game != captionGame) {
-            captionGame = game
-            val fill = {
-                val logoUrl = shot.art?.logo
-                if (logoUrl != null) {
-                    capLogo.visibility = View.VISIBLE
-                    capTitle.visibility = View.GONE
-                    Img.into(capLogo, logoUrl, Img.Spec(ctx.dp(340), alpha = true)) { b ->
-                        if (b == null && captionGame == game) { capLogo.visibility = View.GONE; capTitle.visibility = View.VISIBLE }
-                    }
-                } else {
-                    capLogo.visibility = View.GONE
-                    capTitle.visibility = View.VISIBLE
-                }
-                capTitle.text = game
-                capMeta.text = meta
-            }
+        if (capMeta.text.toString() != meta) {
+            // The date updates in place; the game is the corner logo's job.
             if (captionShown && caption.alpha > 0.05f) {
-                caption.animate().cancel()
-                caption.animate().alpha(0f).setDuration(Motion.FAST).withEndAction { fill(); showCaption() }.start()
-            } else {
-                fill()
-                showCaption()
-            }
-        } else {
-            // Same game: the title stays put; only the date and people follow along.
-            if (capMeta.text.toString() != meta) {
-                if (captionShown) {
-                    capMeta.animate().alpha(0f).setDuration(Motion.FAST).withEndAction {
-                        capMeta.text = meta
-                        capMeta.animate().alpha(1f).setDuration(Motion.BASE).start()
-                    }.start()
-                } else capMeta.text = meta
-            }
-            if (manual) showCaption()
+                capMeta.animate().cancel()
+                capMeta.animate().alpha(0f).setDuration(Motion.FAST).withEndAction {
+                    capMeta.text = meta
+                    capMeta.animate().alpha(1f).setDuration(Motion.BASE).start()
+                }.start()
+            } else capMeta.text = meta
         }
+        if (manual || !captionShown) showCaption()
     }
 
     private fun showCaption() {
+        if (calm) return
         captionShown = true
         val inStrip = stage == Stage.STRIP || stage == Stage.GRID
         if (!inStrip) {
             caption.animate().cancel()
-            caption.animate().alpha(1f).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
+            caption.animate().alpha(1f).translationY(captionLift()).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
             bottomScrim.animate().alpha(1f).setDuration(Motion.SLOW * 2).start()
         }
         handler.removeCallbacks(hideCaption)
-        if (playing) handler.postDelayed(hideCaption, CAPTION_MS)
+        if (playing && stage != Stage.BAR) handler.postDelayed(hideCaption, CAPTION_MS)
     }
+
+    /** The caption moves up above the control bar while it is shown. */
+    private fun captionLift(): Float = if (stage == Stage.BAR) -ctx.dp(66f) else 0f
 
     private val hideCaption = Runnable {
         captionShown = false
@@ -655,44 +740,92 @@ class ShowMode(
         bottomScrim.animate().alpha(0f).setDuration(700L).start()
     }
 
-    /** One quiet pill: "Paused" while paused, nothing while playing (device-api.md). */
-    private fun updateHud(@Suppress("UNUSED_PARAMETER") manual: Boolean) {
+    /** One quiet pill: "Paused" while paused and the bar is not up, nothing while playing. */
+    private fun updateHud() {
         if (calm) { hud.alpha = 0f; return }
-        hudCount.visibility = View.GONE
         hudState.text = ctx.getString(R.string.show_paused)
-        hudState.setTextColor(C.text)
         handler.removeCallbacks(hideHud)
         hud.animate().cancel()
-        hud.animate().alpha(if (playing) 0f else 1f).setDuration(Motion.BASE).start()
+        hud.animate().alpha(if (!playing && stage == Stage.PICTURE) 1f else 0f).setDuration(Motion.BASE).start()
     }
 
-    /** A short note in the same pill (time per picture changed). */
+    /** A short note in the same pill (time per picture changed with +/−). */
     private fun flashHud(text: String) {
+        if (stage == Stage.BAR) return // the bar shows it
         hudState.text = text
-        hudState.setTextColor(C.text)
         hud.animate().cancel()
         hud.animate().alpha(1f).setDuration(Motion.BASE).start()
         handler.removeCallbacks(hideHud)
         handler.postDelayed(hideHud, 1600L)
     }
 
-    private val hideHud = Runnable { if (playing) hud.animate().alpha(0f).setDuration(500L).start() else updateHud(false) }
+    private val hideHud = Runnable { updateHud() }
 
-    private fun setPlaying(on: Boolean, announce: Boolean = true) {
+    private fun setPlaying(on: Boolean) {
         playing = on
         setKeepOn()
         handler.removeCallbacks(advance)
         if (on) {
             kb?.resume()
-            if (stage == Stage.NORMAL || stage == Stage.OPTIONS) handler.postDelayed(advance, interval * 1000L)
-            handler.postDelayed(hideCaption, 2500L)
+            if (stage == Stage.PICTURE || stage == Stage.BAR) handler.postDelayed(advance, interval * 1000L)
+            if (stage != Stage.BAR) handler.postDelayed(hideCaption, 2500L)
         } else {
             kb?.pause()
             handler.removeCallbacks(hideCaption)
-            if (stage == Stage.NORMAL) showCaption()
+            if (stage == Stage.PICTURE) showCaption()
         }
-        if (announce) updateHud(true) else updateHud(false)
-        renderOptions()
+        updateHud()
+        renderBar()
+        scheduleBarHide()
+    }
+
+    // ── control bar ───────────────────────────────────────────────────────────────────
+
+    private fun openBar() {
+        if (items.isEmpty() || calm) return
+        if (stage != Stage.BAR) barSel = ShowKeys.DEFAULT_CTL
+        setStage(Stage.BAR)
+    }
+
+    private fun renderBar() {
+        val shot = items.getOrNull(index)
+        barCount.text = if (items.isEmpty()) "" else ctx.getString(R.string.show_position, index + 1, items.size) + (if (next != null) "+" else "")
+        ctlViews[Ctl.PLAY]?.setIcon(if (playing) R.drawable.ic_pause else R.drawable.ic_play, C.text)
+        ctlViews[Ctl.TIMER]?.setText(ctx.getString(R.string.show_seconds, interval), C.text)
+        val fav = shot?.favorite == true
+        ctlViews[Ctl.FAV]?.setIcon(if (fav) R.drawable.ic_heart_fill else R.drawable.ic_heart, if (fav) C.danger else C.text)
+        val zoom = TvPrefs.slowZoom(ctx)
+        ctlViews[Ctl.ZOOM]?.setText(ctx.getString(if (zoom) R.string.show_zoom_on else R.string.show_zoom_off), if (zoom) C.accent else C.text2)
+        for ((c, v) in ctlViews) v.setSelectedState(stage == Stage.BAR && c == barSel)
+        ctlViews[Ctl.PLAY]?.contentDescription = ctx.getString(if (playing) R.string.show_paused else R.string.show_playing)
+    }
+
+    private fun press(c: Ctl) {
+        when (c) {
+            Ctl.PREV -> step(-1)
+            Ctl.NEXT -> step(1)
+            Ctl.PLAY -> setPlaying(!playing)
+            Ctl.TIMER -> stepInterval(1, wrap = true)
+            Ctl.FAV -> toggleFavorite()
+            Ctl.ZOOM -> {
+                TvPrefs.setSlowZoom(ctx, !TvPrefs.slowZoom(ctx))
+                startKenBurns(front)
+            }
+        }
+        renderBar()
+    }
+
+    private val hideBar = Runnable {
+        if (stage == Stage.BAR && ShowKeys.barExpired(SystemClock.uptimeMillis(), lastInput, playing)) setStage(Stage.PICTURE)
+        else scheduleBarHide()
+    }
+
+    /** While playing the bar goes after [ShowKeys.BAR_HIDE_MS] without input; paused, it stays. */
+    private fun scheduleBarHide() {
+        handler.removeCallbacks(hideBar)
+        if (stage != Stage.BAR || !playing) return
+        val left = (lastInput + ShowKeys.BAR_HIDE_MS - SystemClock.uptimeMillis()).coerceAtLeast(50L)
+        handler.postDelayed(hideBar, left)
     }
 
     // ── favourite ─────────────────────────────────────────────────────────────────────
@@ -706,6 +839,7 @@ class ShowMode(
         if (i == index) capHeart.visibility = if (on) View.VISIBLE else View.GONE
         strip.adapter?.notifyItemChanged(i)
         grid.adapter?.notifyItemChanged(i)
+        renderBar()
         act.lifecycleScope.launch {
             val r = withContext(Dispatchers.IO) { GamehubTv.setShot(ctx, shot.id, favorite = on) }
             if (r is GamehubTv.Res.Err) {
@@ -714,6 +848,7 @@ class ShowMode(
                     if (items.getOrNull(index)?.id == shot.id) capHeart.visibility = if (shot.favorite) View.VISIBLE else View.GONE
                     strip.adapter?.notifyItemChanged(i)
                     grid.adapter?.notifyItemChanged(i)
+                    renderBar()
                 }
                 Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(R.string.show_fav_failed))
             }
@@ -737,18 +872,34 @@ class ShowMode(
         val from = stage
         stage = s
         handler.removeCallbacks(followSel)
+        handler.removeCallbacks(hideBar)
         when (s) {
-            Stage.NORMAL -> {
-                fade(stripPanel, false); fade(gridPanel, false); fade(options, false)
+            Stage.PICTURE -> {
+                fade(stripPanel, false); fade(gridPanel, false); fade(bar, false, slide = true)
                 if (sel != index && items.isNotEmpty()) { index = sel; showCurrent(manual = true) }
-                else { showCaption(); if (playing) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) } }
+                else if (from == Stage.BAR) {
+                    // The bar went away: the picture and its clock carry on untouched.
+                    caption.animate().translationY(0f).setDuration(Motion.SLOW).start()
+                    if (playing) { handler.removeCallbacks(hideCaption); handler.postDelayed(hideCaption, 2500L) }
+                } else {
+                    showCaption()
+                    if (playing) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
+                }
+            }
+            Stage.BAR -> {
+                fade(stripPanel, false); fade(gridPanel, false)
+                renderBar()
+                fade(bar, true, slide = true)
+                showCaption()
+                lastInput = SystemClock.uptimeMillis()
+                scheduleBarHide()
             }
             Stage.STRIP -> {
                 handler.removeCallbacks(advance)
-                if (from == Stage.NORMAL) sel = index
-                fade(options, false)
+                if (from == Stage.PICTURE || from == Stage.BAR) sel = index
+                fade(bar, false, slide = true)
                 fade(gridPanel, false)
-                caption.animate().alpha(0f).setDuration(Motion.BASE).start()
+                caption.animate().alpha(0f).translationY(0f).setDuration(Motion.BASE).start()
                 bottomScrim.animate().alpha(0f).setDuration(Motion.BASE).start()
                 refreshThumbs()
                 fade(stripPanel, true, slide = true)
@@ -763,12 +914,10 @@ class ShowMode(
                 scrollGrid(immediate = true)
                 renderSelInfo()
             }
-            Stage.OPTIONS -> {
-                optSel = 0
-                renderOptions()
-                fade(options, true)
-            }
         }
+        renderBar()
+        updateHud()
+        revealLogo()
     }
 
     private fun fade(v: View, show: Boolean, slide: Boolean = false) {
@@ -779,7 +928,7 @@ class ShowMode(
             v.translationY = if (slide) ctx.dp(16f) else 0f
             v.animate().alpha(1f).translationY(0f).setDuration(Motion.SLOW).setInterpolator(DecelerateInterpolator()).start()
         } else if (v.visibility == View.VISIBLE) {
-            v.animate().alpha(0f).setDuration(Motion.FAST).setInterpolator(AccelerateInterpolator()).withEndAction { v.visibility = View.GONE }.start()
+            v.animate().alpha(0f).translationY(if (slide) ctx.dp(10f) else 0f).setDuration(Motion.FAST).setInterpolator(AccelerateInterpolator()).withEndAction { v.visibility = View.GONE }.start()
         }
     }
 
@@ -853,39 +1002,6 @@ class ShowMode(
         if (dy != 0) grid.smoothScrollBy(0, dy, DecelerateInterpolator(1.5f), 180)
     }
 
-    // ── options ───────────────────────────────────────────────────────────────────────
-
-    private fun renderOptions() {
-        if (optRows.isEmpty()) return
-        val values = listOf(
-            ctx.getString(R.string.show_opt_play) to ctx.getString(if (playing) R.string.show_playing else R.string.show_paused),
-            ctx.getString(R.string.show_opt_interval) to ctx.getString(R.string.show_seconds, interval),
-            ctx.getString(R.string.show_opt_kenburns) to ctx.getString(if (TvPrefs.kenBurns(ctx)) R.string.show_on else R.string.show_off),
-        )
-        for ((i, row) in optRows.withIndex()) {
-            val (k, v) = values[i]
-            val on = i == optSel
-            optKeys[i].text = k
-            optVals[i].text = if (on && i > 0) "‹  $v  ›" else v
-            optVals[i].setTextColor(if (on) C.accent else C.text2)
-            row.isActivated = on
-            row.background?.setState(if (on) intArrayOf(android.R.attr.state_focused, android.R.attr.state_enabled) else intArrayOf(android.R.attr.state_enabled))
-            row.background?.invalidateSelf()
-        }
-    }
-
-    private fun changeOption(d: Int) {
-        when (optSel) {
-            0 -> setPlaying(!playing)
-            1 -> { stepInterval(d); return }
-            2 -> {
-                TvPrefs.setKenBurns(ctx, !TvPrefs.kenBurns(ctx))
-                startKenBurns(front)
-            }
-        }
-        renderOptions()
-    }
-
     // ── keys ──────────────────────────────────────────────────────────────────────────
 
     /** Every key while show mode is open; true consumes (everything but volume and power). */
@@ -898,46 +1014,66 @@ class ShowMode(
             if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) close()
             return true
         }
+        val down = e.action == KeyEvent.ACTION_DOWN
+        if (down) { lastInput = SystemClock.uptimeMillis(); scheduleBarHide() }
         // Back acts on release, so its release never reaches the page underneath.
-        if (Keys.isBack(k)) {
-            if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) back()
+        if (ShowKeys.isBack(k)) {
+            if (!down && !e.isCanceled) perform(ShowKeys.back(stage))
             return true
         }
-        // OK: a tap acts on release (pause, jump); held for 1.5 s it opens the hold menu.
-        if (Keys.isSelect(k) && hold != null && stage != Stage.OPTIONS && items.isNotEmpty()) {
-            if (e.action == KeyEvent.ACTION_DOWN) {
-                if (e.repeatCount == 0) hold.arm(null) { holdFired() }
-            } else if (hold.firedHold) hold.clearFired() else { hold.cancel(); select() }
+        if (ShowKeys.isSelect(k)) {
+            if (items.isEmpty()) return true
+            if (hold != null && ShowKeys.holdable(stage)) {
+                // A tap acts on release (bar, jump); held for 0.75 s it opens the hold menu.
+                if (down) {
+                    if (e.repeatCount == 0) hold.arm(null) { holdFired() }
+                } else if (hold.firedHold) hold.clearFired() else { hold.cancel(); perform(ShowKeys.tap(stage)) }
+            } else if (down && e.repeatCount == 0) {
+                // On the bar OK presses the selected control at once.
+                perform(ShowKeys.tap(stage))
+            }
             return true
         }
-        if (e.action != KeyEvent.ACTION_DOWN) return true
+        if (!down) return true
         hold?.cancel()
-        val first = e.repeatCount == 0
-        if (bumper(k)) return true
-        when {
-            k == KeyEvent.KEYCODE_DPAD_LEFT -> left()
-            k == KeyEvent.KEYCODE_DPAD_RIGHT -> right()
-            k == KeyEvent.KEYCODE_DPAD_DOWN -> down()
-            k == KeyEvent.KEYCODE_DPAD_UP -> if (first || stage != Stage.NORMAL) up()
-            !first -> {}
-            Keys.isSelect(k) -> select()
-            Keys.isPlayPause(k) -> setPlaying(!playing)
-            Keys.isFavorite(k) -> toggleFavorite()
-            Keys.isPrevColl(k) -> switchColl(-1)
-            Keys.isNextColl(k) -> switchColl(1)
-            Keys.isMenu(k) -> setStage(if (stage == Stage.OPTIONS) Stage.NORMAL else Stage.OPTIONS)
-            Keys.isLonger(k) -> stepInterval(1)
-            Keys.isShorter(k) -> stepInterval(-1)
-            k == KeyEvent.KEYCODE_BUTTON_X -> setPlaying(!playing)
-        }
+        perform(ShowKeys.down(stage, k, e.repeatCount))
         return true
     }
 
-    // LB/RB step like ←/→ (device-api.md); with repeat, so holding them scrubs.
-    private fun bumper(k: Int): Boolean = when (k) {
-        KeyEvent.KEYCODE_BUTTON_L1 -> { left(); true }
-        KeyEvent.KEYCODE_BUTTON_R1 -> { right(); true }
-        else -> false
+    private fun perform(a: Act) {
+        when (a) {
+            Act.NONE -> {}
+            Act.PREV -> step(-1)
+            Act.NEXT -> step(1)
+            Act.OPEN_BAR -> openBar()
+            Act.CLOSE_BAR -> setStage(Stage.PICTURE)
+            Act.BAR_LEFT -> { barSel = ShowKeys.move(barSel, -1); renderBar() }
+            Act.BAR_RIGHT -> { barSel = ShowKeys.move(barSel, 1); renderBar() }
+            Act.BAR_PRESS -> press(barSel)
+            Act.TOGGLE_PLAY -> {
+                setPlaying(!playing)
+                if (stage == Stage.PICTURE) { barSel = Ctl.PLAY; openBar() }
+                else if (stage != Stage.BAR) flashHud(ctx.getString(if (playing) R.string.show_playing else R.string.show_paused))
+            }
+            Act.STRIP -> if (items.isNotEmpty()) setStage(Stage.STRIP)
+            Act.GRID -> setStage(Stage.GRID)
+            Act.SEL_LEFT -> moveSel(-1)
+            Act.SEL_RIGHT -> moveSel(1)
+            Act.SEL_UP -> if (sel < gridCols) setStage(Stage.STRIP) else moveSel(-gridCols)
+            Act.SEL_DOWN -> moveSel(gridCols)
+            Act.PICK -> setStage(Stage.PICTURE)
+            Act.BACK -> when (stage) {
+                Stage.PICTURE -> close()
+                Stage.BAR -> setStage(Stage.PICTURE)
+                Stage.STRIP -> setStage(Stage.PICTURE)
+                Stage.GRID -> setStage(Stage.STRIP)
+            }
+            Act.FAVOURITE -> toggleFavorite()
+            Act.PREV_COLL -> switchColl(-1)
+            Act.NEXT_COLL -> switchColl(1)
+            Act.LONGER -> stepInterval(1, wrap = false)
+            Act.SHORTER -> stepInterval(-1, wrap = false)
+        }
     }
 
     private var ltDown = false
@@ -948,17 +1084,17 @@ class ShowMode(
         if (closed) return
         val lt = maxOf(ev.getAxisValue(android.view.MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(android.view.MotionEvent.AXIS_BRAKE))
         val rt = maxOf(ev.getAxisValue(android.view.MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(android.view.MotionEvent.AXIS_GAS))
-        if (!ltDown && lt > 0.6f) { ltDown = true; switchColl(-1) } else if (ltDown && lt < 0.3f) ltDown = false
-        if (!rtDown && rt > 0.6f) { rtDown = true; switchColl(1) } else if (rtDown && rt < 0.3f) rtDown = false
+        if (!ltDown && lt > 0.6f) { ltDown = true; lastInput = SystemClock.uptimeMillis(); switchColl(-1) } else if (ltDown && lt < 0.3f) ltDown = false
+        if (!rtDown && rt > 0.6f) { rtDown = true; lastInput = SystemClock.uptimeMillis(); switchColl(1) } else if (rtDown && rt < 0.3f) rtDown = false
     }
 
-    private fun stepInterval(d: Int) {
-        val all = TvPrefs.INTERVALS
-        val i = all.indexOfFirst { it >= interval }.let { if (it < 0) all.size - 1 else it }
-        interval = all[(i + d).coerceIn(0, all.size - 1)]
+    private fun stepInterval(d: Int, wrap: Boolean) {
+        interval = ShowKeys.nextInterval(interval, d, TvPrefs.INTERVALS, wrap)
         TvPrefs.setInterval(ctx, interval)
-        if (playing && (stage == Stage.NORMAL || stage == Stage.OPTIONS)) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
-        renderOptions()
+        if (playing && (stage == Stage.PICTURE || stage == Stage.BAR)) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
+        // The zoom's length follows the time per picture.
+        if (kb != null) startKenBurns(front)
+        renderBar()
         flashHud(ctx.getString(R.string.show_per_picture, interval))
     }
 
@@ -976,14 +1112,14 @@ class ShowMode(
             val i = items.indexOfFirst { it.id == item.shot.id }
             if (i < 0) return
             index = i; sel = i
-            setStage(Stage.NORMAL)
+            setStage(Stage.PICTURE)
             showCurrent(manual = true)
             setPlaying(true)
         }
         override fun showSession(item: HoldItem) {
             colls = listOf(CollRef("session:" + item.shot.id, ctx.getString(R.string.hold_session_title)))
             openColl(0, item.shot.id, null, null, announce = true)
-            setStage(Stage.NORMAL)
+            setStage(Stage.PICTURE)
         }
         override fun openHub(game: String) {
             close()
@@ -1006,55 +1142,8 @@ class ShowMode(
                 val cur = items.getOrNull(index)
                 if (cur != null) capHeart.visibility = if (cur.favorite) View.VISIBLE else View.GONE
                 refreshThumbs()
+                renderBar()
             }
-        }
-    }
-
-    private fun back() {
-        when (stage) {
-            Stage.NORMAL -> close()
-            Stage.STRIP -> setStage(Stage.NORMAL)
-            Stage.GRID -> setStage(Stage.STRIP)
-            Stage.OPTIONS -> setStage(Stage.NORMAL)
-        }
-    }
-
-    private fun left() = when (stage) {
-        Stage.NORMAL -> step(-1)
-        Stage.STRIP, Stage.GRID -> moveSel(-1)
-        Stage.OPTIONS -> changeOption(-1)
-    }
-
-    private fun right() = when (stage) {
-        Stage.NORMAL -> step(1)
-        Stage.STRIP, Stage.GRID -> moveSel(1)
-        Stage.OPTIONS -> changeOption(1)
-    }
-
-    private fun down() {
-        when (stage) {
-            Stage.NORMAL -> if (items.isNotEmpty()) setStage(Stage.STRIP)
-            Stage.STRIP -> setStage(Stage.GRID)
-            Stage.GRID -> moveSel(gridCols)
-            Stage.OPTIONS -> if (optSel < optRows.size - 1) { optSel++; renderOptions() } else setStage(Stage.NORMAL)
-        }
-    }
-
-    /** ↑ is one step back, like B: grid → filmstrip → picture → close. */
-    private fun up() {
-        when (stage) {
-            Stage.NORMAL -> close()
-            Stage.STRIP -> setStage(Stage.NORMAL)
-            Stage.GRID -> if (sel < gridCols) setStage(Stage.STRIP) else moveSel(-gridCols)
-            Stage.OPTIONS -> if (optSel > 0) { optSel--; renderOptions() }
-        }
-    }
-
-    private fun select() {
-        when (stage) {
-            Stage.NORMAL -> setPlaying(!playing)
-            Stage.STRIP, Stage.GRID -> setStage(Stage.NORMAL)
-            Stage.OPTIONS -> if (optSel == 1) changeOption(1) else changeOption(0)
         }
     }
 
@@ -1073,7 +1162,72 @@ class ShowMode(
     private companion object {
         const val CAPTION_MS = 4500L
         const val MORE_BACKOFF_MS = 30_000L
+        const val LOGO_W = 210
+        const val LOGO_H = 64
     }
+}
+
+/** One control on show mode's bar: an icon (and a short value), hand-selected like the thumbnails. */
+private class BarButton(ctx: android.content.Context, iconRes: Int, private val hDp: Int, private val iconDp: Int, withText: Boolean = false) : FrameLayout(ctx) {
+    private val inner = LinearLayout(ctx)
+    private val icon = ImageView(ctx)
+    private val text: TextView? = if (withText) Kit.value(ctx, "", 14f, C.text).apply { letterSpacing = 0.04f } else null
+    private val ring = FocusRing(resources.displayMetrics.density, hDp / 2f, round = true)
+    private val fill = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(hDp / 2f) }
+    private var iconRes = 0
+    private var iconTint = 0
+
+    init {
+        val pad = dp(3)
+        setPadding(pad, pad, pad, pad)
+        clipChildren = false
+        foreground = ring
+        inner.orientation = LinearLayout.HORIZONTAL
+        inner.gravity = Gravity.CENTER
+        inner.background = fill
+        if (text != null) inner.setPadding(dp(14), 0, dp(16), 0)
+        inner.addView(icon, LinearLayout.LayoutParams(dp(iconDp), dp(iconDp)))
+        if (text != null) inner.addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+        addView(inner, LayoutParams(if (text == null) dp(hDp) else ViewGroup.LayoutParams.WRAP_CONTENT, dp(hDp)))
+        setIcon(iconRes, C.text)
+        setSelectedState(false)
+    }
+
+    fun setIcon(res: Int, tint: Int) {
+        if (res == iconRes && tint == iconTint) return
+        iconRes = res; iconTint = tint
+        icon.setImageResource(res)
+        icon.setColorFilter(tint)
+    }
+
+    fun setText(t: String, color: Int) {
+        text?.text = t
+        text?.setTextColor(color)
+    }
+
+    fun setSelectedState(on: Boolean) {
+        fill.setColor(if (on) C.alpha(C.text, 0.12f) else 0)
+        ring.setState(if (on) intArrayOf(android.R.attr.state_focused) else intArrayOf())
+        val s = if (on) 1.06f else 1f
+        if (scaleX != s) {
+            animate().cancel()
+            animate().scaleX(s).scaleY(s).setDuration(Motion.BASE).setInterpolator(DecelerateInterpolator()).start()
+        }
+    }
+}
+
+/** A soft dark corner (bottom right) so the logo reads over any picture. */
+private class CornerShade(private val color: Int) : android.graphics.drawable.Drawable() {
+    private val p = android.graphics.Paint()
+    override fun onBoundsChange(b: Rect) {
+        p.shader = android.graphics.RadialGradient(b.right.toFloat(), b.bottom.toFloat(), maxOf(b.width(), b.height()).toFloat(),
+            intArrayOf(color, C.alpha(color, 0.5f * Color.alpha(color) / 255f), 0), floatArrayOf(0f, 0.45f, 1f), android.graphics.Shader.TileMode.CLAMP)
+    }
+    override fun draw(c: android.graphics.Canvas) = c.drawRect(bounds, p)
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
 }
 
 /** A filmstrip or grid thumbnail with a hand-drawn selection (show mode does not use focus). */

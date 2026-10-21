@@ -18,8 +18,13 @@ object TvPrefs {
 
     fun interval(c: Context): Int = p(c).getInt("interval", 8)
     fun setInterval(c: Context, s: Int) = p(c).edit().putInt("interval", s).apply()
-    fun kenBurns(c: Context): Boolean = p(c).getBoolean("ken_burns", true)
-    fun setKenBurns(c: Context, on: Boolean) = p(c).edit().putBoolean("ken_burns", on).apply()
+    /**
+     * Slow zoom (Ken Burns) in show mode, the screensaver and the home hero. Off unless Kent turns
+     * it on: some games look bad out of native resolution and the motion makes some people dizzy.
+     * A new key (1.4.1's "ken_burns" defaulted to on), so everyone starts from off once.
+     */
+    fun slowZoom(c: Context): Boolean = p(c).getBoolean("slow_zoom", false)
+    fun setSlowZoom(c: Context, on: Boolean) = p(c).edit().putBoolean("slow_zoom", on).apply()
 }
 
 /** Capture dates in the time zone they were taken in. */
