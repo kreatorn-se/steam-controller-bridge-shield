@@ -32,6 +32,8 @@ import com.steamcontroller.android.ui.widget.Kit
 import com.steamcontroller.android.ui.widget.ListRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** What a long press on a picture acts on: the capture, and the collection it was shown in. */
@@ -268,7 +270,17 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             if (stack.size > 1) { stack.removeLast(); stack.last().invoke() } else close()
         }
 
-        private fun page(render: () -> Unit) { stack.addLast(render); render() }
+        /** Bumped each time a page renders (opened or come back to): async results check it. */
+        private var seq = 0
+
+        private fun page(render: () -> Unit) {
+            val r = { seq++; render() }
+            stack.addLast(r)
+            r()
+        }
+
+        /** The page that started async work with [token] is still the one on screen. */
+        private fun current(token: Int) = menu === this && seq == token
 
         /** Rebuilds the rows; [keep] puts focus back on the same position (a toggle in a list). */
         private fun rows(keep: Boolean = false, build: (MutableList<View>) -> Unit) {
@@ -402,13 +414,15 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
          * just added on the website is there at once); offline, the people seen last.
          */
         private fun people() = page {
+            val token = seq
             rows { r -> r.add(row(ctx.getString(R.string.tv_loading_title)) {}) }
             ctx.lifecycleScope.launch {
                 val all = withContext(Dispatchers.IO) { GamehubTv.peopleAll(ctx) }
+                if (!current(token)) return@launch
                 val list: List<Pair<String, String>> = probe(all, "people_list")?.map { it.id to it.name }
                     ?: withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "people") }?.map { it.collection.removePrefix("person:") to it.title }
                     ?: emptyList()
-                if (menu == null) return@launch
+                if (!current(token)) return@launch
                 // People are tagged by id; both lists carry ids and names.
                 renderPeople(list, keep = false)
             }
@@ -425,24 +439,28 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         }
 
         private fun togglePerson(id: String, name: String, wasOn: Boolean, all: List<Pair<String, String>>) {
-            val beforeIds = shot.peopleIds
-            val beforeNames = shot.people
-            if (wasOn) { shot.peopleIds = beforeIds - id; shot.people = beforeNames - name }
-            else { shot.peopleIds = beforeIds + id; shot.people = beforeNames + name }
+            val token = seq
+            if (wasOn) { shot.peopleIds = shot.peopleIds - id; shot.people = shot.people - name }
+            else { shot.peopleIds = shot.peopleIds + id; shot.people = shot.people + name }
             renderPeople(all)
             ctx.lifecycleScope.launch {
-                val r = withContext(Dispatchers.IO) { GamehubTv.setPeople(ctx, shot.id, if (wasOn) emptyList() else listOf(id), if (wasOn) listOf(id) else emptyList()) }
+                val (r, last) = serialWrite(shot.id) {
+                    withContext(Dispatchers.IO) { GamehubTv.setPeople(ctx, shot.id, if (wasOn) emptyList() else listOf(id), if (wasOn) listOf(id) else emptyList()) }
+                }
                 when (r) {
                     is GamehubTv.Res.Ok -> {
-                        r.value?.let { fresh -> shot.people = fresh.people; shot.peopleIds = fresh.peopleIds }
+                        // The hub's copy only once no other change to this capture is on its way.
+                        if (last) r.value?.let { fresh -> shot.people = fresh.people; shot.peopleIds = fresh.peopleIds }
                         hc.changed(item, false)
                     }
                     is GamehubTv.Res.Err -> {
-                        shot.peopleIds = beforeIds; shot.people = beforeNames
+                        // Undo just this change; other toggles keep theirs.
+                        if (wasOn) { if (id !in shot.peopleIds) { shot.peopleIds = shot.peopleIds + id; shot.people = shot.people + name } }
+                        else { shot.peopleIds = shot.peopleIds - id; shot.people = shot.people - name }
                         failed(r)
                     }
                 }
-                if (menu != null && stack.isNotEmpty()) renderPeople(all)
+                if (current(token)) renderPeople(all)
             }
         }
 
@@ -450,23 +468,29 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
 
         /** The presets plus every keyword in use (GET /keywords); toggled with A, saved at once. */
         private fun keywords() = page {
+            val token = seq
             rows { r -> r.add(row(ctx.getString(R.string.tv_loading_title)) {}) }
             ctx.lifecycleScope.launch {
                 val res = withContext(Dispatchers.IO) { GamehubTv.keywords(ctx) }
                 if (res is GamehubTv.Res.Err && res.fail == GamehubTv.Fail.NOT_DEPLOYED) {
                     // A hub without keywords: hide them quietly, no "update Gamehub" note.
                     GamehubTv.Missing.mark(ctx, KEYWORDS)
-                    if (menu != null && stack.size > 1) back()
+                    if (current(token) && stack.size > 1) back()
                     return@launch
                 }
                 if (res is GamehubTv.Res.Ok) GamehubTv.Missing.clear(ctx, KEYWORDS)
-                if (menu == null) return@launch
+                if (!current(token)) return@launch
                 val names = res.valueOrNull()?.map { it.name } ?: PRESET_KEYWORDS
                 renderKeywords(mergeNames(names, shot.keywords), keep = false)
             }
         }
 
         private fun has(name: String) = shot.keywords.any { it.equals(name, ignoreCase = true) }
+
+        private fun withKeyword(list: List<String>, name: String, on: Boolean): List<String> {
+            val without = list.filterNot { it.equals(name, ignoreCase = true) }
+            return if (on) (without + name).sortedBy { it.lowercase() } else without
+        }
 
         private fun renderKeywords(all: List<String>, keep: Boolean = true) {
             rows(keep) { r ->
@@ -479,31 +503,35 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         }
 
         private fun toggleKeyword(name: String, all: List<String>) {
+            val token = seq
             val wasOn = has(name)
-            val before = shot.keywords
-            shot.keywords = if (wasOn) before.filterNot { it.equals(name, ignoreCase = true) } else (before + name).sortedBy { it.lowercase() }
+            shot.keywords = withKeyword(shot.keywords, name, !wasOn)
             renderKeywords(all)
             ctx.lifecycleScope.launch {
-                val r = withContext(Dispatchers.IO) { GamehubTv.setKeywords(ctx, shot.id, if (wasOn) emptyList() else listOf(name), if (wasOn) listOf(name) else emptyList()) }
+                val (r, last) = serialWrite(shot.id) {
+                    withContext(Dispatchers.IO) { GamehubTv.setKeywords(ctx, shot.id, if (wasOn) emptyList() else listOf(name), if (wasOn) listOf(name) else emptyList()) }
+                }
                 when (r) {
                     is GamehubTv.Res.Ok -> {
-                        r.value?.let { fresh -> shot.keywords = fresh.keywords }
+                        if (last) r.value?.let { fresh -> shot.keywords = fresh.keywords }
                         hc.changed(item, false)
                     }
                     is GamehubTv.Res.Err -> {
-                        shot.keywords = before
+                        // Undo just this keyword; other toggles keep theirs.
+                        shot.keywords = withKeyword(shot.keywords, name, wasOn)
                         failed(r)
                     }
                 }
-                if (menu != null && stack.isNotEmpty()) renderKeywords(all)
+                if (current(token)) renderKeywords(all)
             }
         }
 
         private fun newKeyword(all: List<String>) {
+            val token = seq
             ProfileOps.promptName(ctx, ctx.getString(R.string.hold_keywords_new), "") { raw ->
                 // The hub's rules: trimmed, at most 40 characters, no commas.
                 val name = raw.replace(",", " ").trim().replace(Regex("\\s+"), " ").take(40)
-                if (name.isEmpty() || menu == null) return@promptName
+                if (name.isEmpty() || !current(token)) return@promptName
                 val list = mergeNames(all, listOf(name))
                 if (!has(name)) toggleKeyword(list.first { it.equals(name, ignoreCase = true) }, list) else renderKeywords(list)
             }
@@ -550,6 +578,28 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         "friend" -> ctx.getString(R.string.hold_source_friend)
         "ps5" -> "PlayStation 5"
         else -> s.replaceFirstChar { it.uppercase() }
+    }
+
+    // ── writes ────────────────────────────────────────────────────────────────────────
+
+    private val writeLocks = HashMap<String, Mutex>()
+    private val pendingWrites = HashMap<String, Int>()
+
+    /**
+     * Runs [block] (a write to one capture) after any earlier write to the same capture, so the
+     * hub sees them in order. Also says whether no other write to it is still waiting ([Pair.second]),
+     * the only time the hub's copy of the capture may replace the local one. Main thread.
+     */
+    private suspend fun <T> serialWrite(shotId: String, block: suspend () -> T): Pair<T, Boolean> {
+        pendingWrites[shotId] = (pendingWrites[shotId] ?: 0) + 1
+        val lock = writeLocks.getOrPut(shotId) { Mutex() }
+        try {
+            val v = lock.withLock { block() }
+            return v to ((pendingWrites[shotId] ?: 1) <= 1)
+        } finally {
+            val n = (pendingWrites[shotId] ?: 1) - 1
+            if (n <= 0) { pendingWrites.remove(shotId); writeLocks.remove(shotId) } else pendingWrites[shotId] = n
+        }
     }
 
     // ── undo ──────────────────────────────────────────────────────────────────────────
