@@ -26,8 +26,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * LIBRARY: games (official grid art), albums, people and favourites as D-pad grids. Tabs switch
- * as focus lands on them; any tile opens show mode, with LB/RB moving between its neighbours.
+ * LIBRARY: games (official grid art), albums, people, favourites and keywords as D-pad grids.
+ * Tabs switch as focus lands on them; any tile opens show mode, with LB/RB moving between its
+ * neighbours. Keywords: a row of keyword chips (A toggles; a capture must have all of them) over
+ * the captures that match. The tab is quietly absent while the hub has no keywords.
  */
 class LibraryPage(host: Host) : Page(host) {
     private enum class Tab(val label: Int, val w: Int, val h: Int, val circle: Boolean) {
@@ -35,6 +37,7 @@ class LibraryPage(host: Host) : Page(host) {
         ALBUMS(R.string.lib_albums, 240, 135, false),
         PEOPLE(R.string.lib_people, 120, 120, true),
         FAVOURITES(R.string.lib_favourites, 180, 101, false),
+        KEYWORDS(R.string.lib_keywords, 180, 101, false),
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -55,6 +58,16 @@ class LibraryPage(host: Host) : Page(host) {
     private var favNext: String? = null
     private var favLoading = false
     private val errors = HashMap<Tab, GamehubTv.Res.Err>()
+    // Keywords: the chips, the chosen ones and the captures that have them all.
+    private val kwScroll = android.widget.HorizontalScrollView(ctx)
+    private val kwRow = Kit.row(ctx)
+    private val kwViews = LinkedHashMap<String, TextView>()
+    private var kwList: List<GamehubTv.Keyword> = emptyList()
+    private val kwChosen = ArrayList<String>()
+    private val kwShots = ArrayList<Shot>()
+    private var kwNext: String? = null
+    private var kwLoading = false
+    private var kwToken = 0
     private val gap = ctx.dp(14)
 
     override val view: View = build()
@@ -84,6 +97,13 @@ class LibraryPage(host: Host) : Page(host) {
         }
         sortRow.addView(Kit.label(ctx, ctx.getString(R.string.lib_sort), 10.5f, C.text3), 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(6); marginEnd = ctx.dp(8) })
         col.addView(sortRow, Kit.lp(l = -3, t = 2, ctx = ctx))
+        kwRow.clipChildren = false
+        kwScroll.isHorizontalScrollBarEnabled = false
+        kwScroll.clipChildren = false
+        kwScroll.clipToPadding = false
+        kwScroll.overScrollMode = View.OVER_SCROLL_NEVER
+        kwScroll.addView(kwRow)
+        col.addView(kwScroll, Kit.lp(l = -3, t = 2, ctx = ctx))
         renderSort()
         val body = FrameLayout(ctx)
         body.clipChildren = false
@@ -125,6 +145,8 @@ class LibraryPage(host: Host) : Page(host) {
                 val a = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "albums") }
                 val p = withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "people") }
                 val f = withContext(Dispatchers.IO) { GamehubTv.cachedShots(ctx, "favourites") }
+                val missingKw = withContext(Dispatchers.IO) { GamehubTv.Missing.has(ctx, Hold.KEYWORDS) }
+                tabViews[Tab.KEYWORDS]?.visibility = if (missingKw) View.GONE else View.VISIBLE
                 if (g != null && !lists.containsKey(Tab.GAMES)) lists[Tab.GAMES] = g
                 if (a != null && !lists.containsKey(Tab.ALBUMS)) lists[Tab.ALBUMS] = a
                 if (p != null && !lists.containsKey(Tab.PEOPLE)) lists[Tab.PEOPLE] = p
@@ -151,6 +173,8 @@ class LibraryPage(host: Host) : Page(host) {
             applyList(Tab.ALBUMS, a)
             val p = withContext(Dispatchers.IO) { GamehubTv.people(ctx) }
             applyList(Tab.PEOPLE, p)
+            val k = withContext(Dispatchers.IO) { GamehubTv.keywords(ctx) }
+            applyKeywords(k)
             val f = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "favourites") }
             when (f) {
                 is GamehubTv.Res.Ok -> {
@@ -168,6 +192,84 @@ class LibraryPage(host: Host) : Page(host) {
             }
             fetching = false
             updateGrid()
+            if (tab == Tab.KEYWORDS) loadKeywordShots(reset = false)
+        }
+    }
+
+    // ── keywords ──────────────────────────────────────────────────────────────────────
+
+    private fun applyKeywords(r: GamehubTv.Res<List<GamehubTv.Keyword>>) {
+        when (r) {
+            is GamehubTv.Res.Ok -> {
+                GamehubTv.Missing.clear(ctx, Hold.KEYWORDS)
+                tabViews[Tab.KEYWORDS]?.visibility = View.VISIBLE
+                kwList = r.value
+                renderKeywordChips()
+            }
+            is GamehubTv.Res.Err -> if (r.fail == GamehubTv.Fail.NOT_DEPLOYED) {
+                // An older hub: no keywords anywhere, and no "update" note either.
+                GamehubTv.Missing.mark(ctx, Hold.KEYWORDS)
+                if (tab == Tab.KEYWORDS) tabViews[Tab.GAMES]?.requestFocus()
+                tabViews[Tab.KEYWORDS]?.visibility = View.GONE
+            }
+        }
+    }
+
+    /** Chips for the keywords in use (and any chosen), updated in place so focus stays put. */
+    private fun renderKeywordChips() {
+        val names = Hold.mergeNames(kwList.filter { it.count > 0 }.map { it.name }, kwChosen)
+        val counts = kwList.associate { it.name.lowercase() to it.count }
+        if (names != kwViews.keys.toList()) {
+            val focused = kwViews.entries.firstOrNull { it.value.hasFocus() }?.key
+            kwRow.removeAllViews()
+            kwViews.clear()
+            for (n in names) {
+                val b = Kit.button(ctx, n, Kit.Btn.GHOST) { toggleKeyword(n) }
+                kwViews[n] = b
+                kwRow.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(2) })
+            }
+            focused?.let { kwViews[it]?.requestFocus() }
+        }
+        for ((n, v) in kwViews) {
+            val on = kwChosen.any { it.equals(n, ignoreCase = true) }
+            v.isActivated = on
+            v.setTextColor(if (on) C.text else C.text2)
+            val c = counts[n.lowercase()] ?: 0
+            v.text = if (c > 0) "$n  $c" else n
+        }
+    }
+
+    private fun toggleKeyword(name: String) {
+        val had = kwChosen.firstOrNull { it.equals(name, ignoreCase = true) }
+        if (had != null) kwChosen.remove(had) else kwChosen.add(name)
+        renderKeywordChips()
+        loadKeywordShots(reset = true)
+    }
+
+    /** Page one of the captures with every chosen keyword (or more of them, [reset] false). */
+    private fun loadKeywordShots(reset: Boolean, more: Boolean = false) {
+        val token = if (more) kwToken else ++kwToken
+        if (reset) { kwShots.clear(); kwNext = null; if (tab == Tab.KEYWORDS) updateGrid() }
+        if (kwChosen.isEmpty()) { kwLoading = false; if (tab == Tab.KEYWORDS) updateGrid(); return }
+        val chosen = kwChosen.toList()
+        val cursor = if (more) kwNext ?: return else null
+        if (more && kwLoading) return
+        kwLoading = true
+        host.activity.lifecycleScope.launch {
+            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "recent", before = cursor, filters = emptyMap(), kw = chosen) }
+            if (token != kwToken) return@launch
+            kwLoading = false
+            when (r) {
+                is GamehubTv.Res.Ok -> {
+                    errors.remove(Tab.KEYWORDS)
+                    if (!more) kwShots.clear()
+                    val ids = kwShots.mapTo(HashSet()) { it.id }
+                    for (sh in r.value.items) if (ids.add(sh.id)) kwShots.add(sh)
+                    kwNext = r.value.next
+                }
+                is GamehubTv.Res.Err -> if (!more) errors[Tab.KEYWORDS] = r
+            }
+            if (tab == Tab.KEYWORDS) updateGrid()
         }
     }
 
@@ -193,12 +295,14 @@ class LibraryPage(host: Host) : Page(host) {
         val a = grid.adapter
         if (a == null) { show(tab); return }
         if (tab == Tab.FAVOURITES) (a as SimpleAdapter<Shot>).update(ArrayList(favs), { it.id }) { x, y -> x.favorite == y.favorite && x.game == y.game }
+        else if (tab == Tab.KEYWORDS) (a as SimpleAdapter<Shot>).update(ArrayList(kwShots), { it.id }) { x, y -> x.favorite == y.favorite && x.game == y.game }
         else (a as SimpleAdapter<Coll>).update(lists[tab] ?: emptyList(), { it.collection }) { x, y -> x == y }
         renderMessage(tab, a.itemCount == 0)
     }
 
     private fun renderSort() {
         sortRow.visibility = if (tab == Tab.GAMES) View.VISIBLE else View.GONE
+        kwScroll.visibility = if (tab == Tab.KEYWORDS) View.VISIBLE else View.GONE
         for ((k, v) in sortViews) { v.isActivated = k == sort; v.setTextColor(if (k == sort) C.text else C.text2) }
     }
 
@@ -229,7 +333,11 @@ class LibraryPage(host: Host) : Page(host) {
 
     private fun renderTabs() {
         for ((t, v) in tabViews) {
-            val n = if (t == Tab.FAVOURITES) favs.size else lists[t]?.size
+            val n = when (t) {
+                Tab.FAVOURITES -> favs.size
+                Tab.KEYWORDS -> null
+                else -> lists[t]?.size
+            }
             v.text = ctx.getString(t.label) + (if (n != null && n > 0) "  $n" + (if (t == Tab.FAVOURITES && favNext != null) "+" else "") else "")
             v.isActivated = t == tab
             v.setTextColor(if (t == tab) C.text else C.text2)
@@ -242,6 +350,7 @@ class LibraryPage(host: Host) : Page(host) {
         tabsMemory.remembered = tabViews[t]
         renderSort()
         show(t)
+        if (t == Tab.KEYWORDS && kwChosen.isNotEmpty() && kwShots.isEmpty()) loadKeywordShots(reset = false)
     }
 
     // ── grid ──────────────────────────────────────────────────────────────────────────
@@ -254,18 +363,30 @@ class LibraryPage(host: Host) : Page(host) {
         val lm = KeylineGrid(ctx, span) { (grid.height * 0.26f).toInt() }
         grid.layoutManager = lm
         gridMemory.remembered = null
-        val spec = Img.Spec(ctx.px(t.w))
+        val spec = Img.cover(ctx, t.w, t.h, Tile.FOCUS_SCALE)
         val empty: Boolean
         if (t == Tab.FAVOURITES) {
             grid.adapter = SimpleAdapter(ArrayList(favs), { Tile(ctx, t.w, t.h, captionOnFocus = true) }) { v, shot, i ->
                 val tile = v as Tile
-                Img.into(tile.image, shot.previewUrl, spec)
+                Img.into(tile.image, shot.previewUrl, spec, full = shot.fullUrl)
                 tile.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot))
                 tile.card.setOnClickListener { playFavourites(shot) }
                 tile.card.holdItem(HoldItem(shot, CollRef("favourites", ctx.getString(R.string.tv_favourites)), favs))
                 if (i >= favs.size - span * 2) loadMoreFavs()
             }
             empty = favs.isEmpty()
+        } else if (t == Tab.KEYWORDS) {
+            grid.adapter = SimpleAdapter(ArrayList(kwShots), { Tile(ctx, t.w, t.h, captionOnFocus = true) }) { v, shot, i ->
+                val tile = v as Tile
+                Img.into(tile.image, shot.previewUrl, spec, full = shot.fullUrl)
+                tile.setFavorite(shot.favorite)
+                tile.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot))
+                tile.card.setOnClickListener { playKeywords(shot) }
+                tile.card.holdItem(HoldItem(shot, null, kwShots))
+                if (i >= kwShots.size - span * 2) loadKeywordShots(reset = false, more = true)
+            }
+            empty = kwShots.isEmpty()
+            if (kwViews.isEmpty() && kwList.isNotEmpty()) renderKeywordChips()
         } else {
             val items = lists[t] ?: emptyList()
             grid.adapter = SimpleAdapter(items, { Tile(ctx, t.w, t.h, captionOnFocus = t == Tab.GAMES, circle = t.circle) }) { v, c, _ ->
@@ -284,9 +405,15 @@ class LibraryPage(host: Host) : Page(host) {
         if (empty) {
             val e = errors[t]
             message.text = when {
+                t == Tab.KEYWORDS && e == null -> ctx.getString(when {
+                    kwViews.isEmpty() -> if (fetching) R.string.tv_loading_title else R.string.kw_none
+                    kwChosen.isEmpty() -> R.string.lib_kw_hint
+                    kwLoading -> R.string.tv_loading_title
+                    else -> R.string.lib_kw_empty
+                })
                 e == null -> ctx.getString(if (lists.containsKey(t) || t == Tab.FAVOURITES) R.string.lib_empty else R.string.tv_loading_title)
                 e.fail == GamehubTv.Fail.NOT_DEPLOYED -> ctx.getString(R.string.lib_update)
-                e.fail == GamehubTv.Fail.NOT_LINKED || e.fail == GamehubTv.Fail.UNAUTHORIZED -> ctx.getString(R.string.inbox_link_body)
+                e.fail == GamehubTv.Fail.NOT_LINKED || e.fail == GamehubTv.Fail.UNAUTHORIZED -> ctx.getString(R.string.lib_link_body)
                 else -> ctx.getString(R.string.tv_offline_body, e.message)
             }
         }
@@ -296,7 +423,7 @@ class LibraryPage(host: Host) : Page(host) {
         when (t) {
             Tab.GAMES -> {
                 val art = c.art?.grid
-                Img.into(tile.image, art ?: c.cover?.previewUrl, if (art != null) spec else Img.Spec(ctx.px(t.h * 16 / 9)))
+                Img.into(tile.image, art ?: c.cover?.previewUrl, spec)
                 tile.setOver(if (art == null) c.title else null)
                 tile.setCaption(if (art == null) null else c.title, Fmt.count(c.count))
             }
@@ -331,6 +458,11 @@ class LibraryPage(host: Host) : Page(host) {
         val items = lists[t] ?: return
         if (t == Tab.GAMES) { items.getOrNull(i)?.let { host.openGame(it.title) }; return }
         host.openShow(ShowRequest(items.map { CollRef(it.collection, it.title) }, i))
+    }
+
+    private fun playKeywords(start: Shot) {
+        val title = kwChosen.joinToString(" + ")
+        host.openShow(ShowRequest(listOf(CollRef(null, title, ArrayList(kwShots))), 0, startShotId = start.id))
     }
 
     private fun playFavourites(start: Shot) {

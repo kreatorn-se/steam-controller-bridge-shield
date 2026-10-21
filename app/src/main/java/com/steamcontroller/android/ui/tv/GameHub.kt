@@ -42,7 +42,7 @@ object GameArt {
 /**
  * A hub for every game: the header (official hero art, or a capture chosen as background, with the
  * official logo), a stats strip (Steam playtime, sessions, captures, achievements with the rarest
- * and latest unlocks), filters (All, Favourites, Session, Year, Source), then every capture as a
+ * and latest unlocks), filters (All, Favourites, Keywords, Session, Year, Source), then every capture as a
  * dense justified grid in day sections, newest first. Focus enters on the latest capture; any
  * capture opens show mode; a long press opens the hold menu.
  */
@@ -56,6 +56,7 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private val left = safeH + ctx.dp(64 + 8)
     private val contentW = screenW - left - safeH
     private val rowH = ctx.dp(112)
+    private val bgSpec = Img.coverPx(screenW, (screenH * 0.62f).toInt())
     private val gap = ctx.dp(8)
 
     val root = FrameLayout(ctx)
@@ -80,6 +81,8 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private var year: Int? = null
     private var source: String? = null
     private var session: GamehubTv.SessionInfo? = null
+    /** Keywords a capture must all have (round 5); empty: any. */
+    private var kw: List<String> = emptyList()
     private var entered = false
     private var closed = false
 
@@ -201,7 +204,7 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     // ── header ────────────────────────────────────────────────────────────────────────
 
     private fun applyArt(art: GamehubTv.Art, background: String?) {
-        Img.into(bg, background ?: art.hero, Img.Spec(screenW))
+        Img.into(bg, background ?: art.hero, bgSpec)
         val l = art.logo
         if (l != null) {
             Img.into(logo, l, Img.Spec(ctx.dp(320), alpha = true)) { b ->
@@ -214,7 +217,7 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private fun renderHub(h: GamehubTv.GameHub) {
         hub = h
         GameArt.put(game, h.art)
-        h.art?.let { applyArt(it, h.backgroundUrl) } ?: h.backgroundUrl?.let { Img.into(bg, it, Img.Spec(screenW)) }
+        h.art?.let { applyArt(it, h.backgroundUrl) } ?: h.backgroundUrl?.let { Img.into(bg, it, bgSpec) }
         meta.text = buildString {
             append(Fmt.count(h.captures))
             if (h.sessions > 0) append("  ·  ").append(ctx.resources.getQuantityString(R.plurals.hub_sessions, h.sessions, h.sessions))
@@ -296,10 +299,19 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
         val focused = (0 until filters.childCount).indexOfFirst { filters.getChildAt(it).hasFocus() }
         filters.removeAllViews()
         val h = hub
-        val none = !fav && year == null && source == null && session == null
+        val none = !fav && year == null && source == null && session == null && kw.isEmpty()
         val chips = ArrayList<TextView>()
-        chips.add(chip(ctx.getString(R.string.hub_all), none) { fav = false; year = null; source = null; session = null; reload() })
+        chips.add(chip(ctx.getString(R.string.hub_all), none) { fav = false; year = null; source = null; session = null; kw = emptyList(); reload() })
         chips.add(chip(ctx.getString(R.string.hub_fav_filter), fav) { fav = !fav; reload() })
+        // Keywords on this game's captures (filters.keywords); quietly absent on an older hub.
+        if (h != null && (h.keywords.isNotEmpty() || kw.isNotEmpty()) && !GamehubTv.Missing.has(ctx, Hold.KEYWORDS)) {
+            val label = when (kw.size) {
+                0 -> ctx.getString(R.string.kw_filter)
+                1, 2 -> kw.joinToString(" + ")
+                else -> ctx.getString(R.string.kw_filter_n, kw.size)
+            }
+            chips.add(chip("$label  ▾", kw.isNotEmpty()) { pickKeywords() })
+        }
         if (h != null && h.sessionList.isNotEmpty()) chips.add(chip(session?.let { sessionLabel(it) } ?: ctx.getString(R.string.hub_session_filter) + "  ▾", session != null) { pickSession() })
         if (h != null && h.years.size > 1) chips.add(chip((year?.toString() ?: ctx.getString(R.string.hub_year_filter)) + "  ▾", year != null) { pickYear() })
         if (h != null && h.sources.size > 1) chips.add(chip((source?.uppercase() ?: ctx.getString(R.string.hub_source_filter)) + "  ▾", source != null) { pickSource() })
@@ -315,6 +327,35 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
         val sheet = Sheet(ctx, 380)
         sheet.header(eyebrow, game, null)
         for ((label, action) in options) sheet.body.addView(ListRow(ctx, label) { host.closeSheet(); action() })
+        host.openSheet(sheet)
+        sheet.focus(null)
+    }
+
+    /** Several keywords at once: A toggles, the captures reload when the sheet closes. */
+    private fun pickKeywords() {
+        val h = hub ?: return
+        val chosen = LinkedHashSet(kw)
+        val names = Hold.mergeNames(h.keywords.map { it.name }, kw)
+        val counts = h.keywords.associate { it.name.lowercase() to it.count }
+        val sheet = Sheet(ctx, 380)
+        sheet.header(ctx.getString(R.string.kw_filter), game, ctx.getString(R.string.kw_pick_hint))
+        val rows = ArrayList<Pair<String, ListRow>>()
+        fun paint() { for ((n, r) in rows) r.tagView.visibility = if (chosen.any { it.equals(n, ignoreCase = true) }) View.VISIBLE else View.INVISIBLE }
+        sheet.body.addView(ListRow(ctx, ctx.getString(R.string.kw_clear)) { chosen.clear(); paint() })
+        for (n in names) {
+            val r = ListRow(ctx, n, hint = counts[n.lowercase()]?.let { Fmt.count(it) }, tag = "✓") {
+                val had = chosen.firstOrNull { it.equals(n, ignoreCase = true) }
+                if (had != null) chosen.remove(had) else chosen.add(n)
+                paint()
+            }
+            rows.add(n to r)
+            sheet.body.addView(r)
+        }
+        paint()
+        sheet.onClosed = {
+            val next = chosen.toList()
+            if (next != kw) { kw = next; reload() }
+        }
         host.openSheet(sheet)
         sheet.focus(null)
     }
@@ -347,6 +388,7 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     }
 
     private fun reload() {
+        if (closed) return
         renderFilters()
         shots.clear()
         next = null
@@ -359,13 +401,14 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private fun load() {
         job?.cancel()
         val f = filterMap()
+        val k = kw
         loadingMore = true
         job = host.activity.lifecycleScope.launch {
             if (shots.isEmpty()) {
-                val cached = withContext(Dispatchers.IO) { GamehubTv.cachedShots(ctx, "game:$game", f) }
+                val cached = withContext(Dispatchers.IO) { GamehubTv.cachedShots(ctx, "game:$game", f, k) }
                 if (cached != null && shots.isEmpty()) { shots.addAll(cached.items); next = cached.next; rebuild() }
             }
-            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "game:$game", limit = 120, filters = f) }
+            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "game:$game", limit = 120, filters = f, kw = k) }
             loadingMore = false
             when (r) {
                 is GamehubTv.Res.Ok -> {
@@ -387,10 +430,11 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
         if (loadingMore) return
         loadingMore = true
         val f = filterMap()
+        val k = kw
         host.activity.lifecycleScope.launch {
-            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "game:$game", before = cursor, limit = 120, filters = f) }
+            val r = withContext(Dispatchers.IO) { GamehubTv.shots(ctx, "game:$game", before = cursor, limit = 120, filters = f, kw = k) }
             loadingMore = false
-            if (closed || f != filterMap()) return@launch
+            if (closed || f != filterMap() || k != kw) return@launch
             if (r is GamehubTv.Res.Ok) {
                 val ids = shots.mapTo(HashSet()) { it.id }
                 for (s in r.value.items) if (ids.add(s.id)) shots.add(s)
@@ -461,9 +505,9 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
 
     private fun playFrom(shot: Shot?) {
         if (shots.isEmpty()) return
-        val f = filterMap()
-        val ref = CollRef(if (f.isEmpty()) "game:$game" else null, game, if (f.isEmpty()) null else ArrayList(shots))
-        host.openShow(ShowRequest(listOf(ref), 0, startShotId = shot?.id, preload = ArrayList(shots), preloadNext = if (f.isEmpty()) next else null))
+        val plain = filterMap().isEmpty() && kw.isEmpty()
+        val ref = CollRef(if (plain) "game:$game" else null, game, if (plain) null else ArrayList(shots))
+        host.openShow(ShowRequest(listOf(ref), 0, startShotId = shot?.id, preload = ArrayList(shots), preloadNext = if (plain) next else null))
     }
 
     private inner class Adapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -507,7 +551,8 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
             val card = row.getChildAt(k) as PicCard
             val w = r.widths[k]
             card.layoutParams = LinearLayout.LayoutParams(w + ctx.dp(6), r.height + ctx.dp(6)).apply { marginEnd = if (k < r.shots.size - 1) gap - ctx.dp(6) else 0 }
-            Img.into(card.image, s.previewUrl, Img.Spec(w.coerceAtLeast(ctx.px(80))))
+            // Real pixels of the justified cell, at its focused size.
+            Img.into(card.image, s.previewUrl, Img.coverPx(w.coerceAtLeast(ctx.px(80)), r.height, Tile.FOCUS_SCALE), full = s.fullUrl)
             card.setFavorite(s.favorite)
             card.setOnClickListener { playFrom(s) }
             card.holdItem(HoldItem(s, CollRef("game:$game", game), shots))

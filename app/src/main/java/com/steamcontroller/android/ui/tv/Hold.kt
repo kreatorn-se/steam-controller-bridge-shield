@@ -255,7 +255,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         private fun header(): View {
             val row = Kit.row(ctx)
             val iv = ImageView(ctx).apply { scaleType = ImageView.ScaleType.CENTER_CROP; roundCorners(6f); setBackgroundColor(C.surface2) }
-            Img.into(iv, shot.previewUrl, Img.Spec(ctx.px(112)))
+            Img.into(iv, shot.previewUrl, Img.cover(ctx, 112, 63), full = shot.fullUrl)
             row.addView(iv, LinearLayout.LayoutParams(ctx.dp(112), ctx.dp(63)))
             val t = Kit.column(ctx)
             t.addView(Kit.title(ctx, shot.gameOrUnknown(), 16f).apply { maxLines = 2 })
@@ -270,13 +270,19 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
 
         private fun page(render: () -> Unit) { stack.addLast(render); render() }
 
-        private fun rows(build: (MutableList<View>) -> Unit) {
+        /** Rebuilds the rows; [keep] puts focus back on the same position (a toggle in a list). */
+        private fun rows(keep: Boolean = false, build: (MutableList<View>) -> Unit) {
+            val at = if (keep) (0 until col.childCount).indexOfFirst { col.getChildAt(it).hasFocus() } else -1
             col.removeAllViews()
             val list = ArrayList<View>()
             build(list)
             for (v in list) col.addView(v)
-            scroll.scrollTo(0, 0)
-            col.getChildAt(0)?.requestFocus()
+            if (at >= 0) {
+                col.getChildAt(at.coerceAtMost(col.childCount - 1))?.requestFocus()
+            } else {
+                scroll.scrollTo(0, 0)
+                col.getChildAt(0)?.requestFocus()
+            }
         }
 
         private fun row(title: String, hint: String? = null, tag: String? = null, tagColor: Int = C.accent, onClick: () -> Unit): ListRow =
@@ -290,6 +296,8 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
                 // 404, hence the new keys), never by a failed write.
                 if (!GamehubTv.Missing.has(ctx, "albums_list")) r.add(row(ctx.getString(R.string.hold_album)) { albums() })
                 if (!GamehubTv.Missing.has(ctx, "people_list")) r.add(row(ctx.getString(R.string.hold_people), hint = shot.people.takeIf { it.isNotEmpty() }?.let { Fmt.people(it) }) { people() })
+                // Hidden quietly (no "update" note) while the hub has no keywords.
+                if (!GamehubTv.Missing.has(ctx, KEYWORDS)) r.add(row(ctx.getString(R.string.hold_keywords), hint = shot.keywords.takeIf { it.isNotEmpty() }?.joinToString(", ")) { keywords() })
                 val game = shot.game
                 if (game != null) r.add(row(ctx.getString(R.string.hold_background)) { background(game) })
                 r.add(row(ctx.getString(R.string.hold_slideshow)) { close(); hc.slideshowFrom(item) })
@@ -385,18 +393,25 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             return r.valueOrNull()
         }
 
+        /**
+         * Everyone who can be tagged (`/people?all=1`, read each time the picker opens, so someone
+         * just added on the website is there at once); offline, the people seen last.
+         */
         private fun people() = page {
             rows { r -> r.add(row(ctx.getString(R.string.tv_loading_title)) {}) }
             ctx.lifecycleScope.launch {
-                val list = withContext(Dispatchers.IO) { GamehubTv.people(ctx) }.let { r -> probe(r, "people_list") ?: withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "people") } ?: emptyList() }
+                val all = withContext(Dispatchers.IO) { GamehubTv.peopleAll(ctx) }
+                val list: List<Pair<String, String>> = probe(all, "people_list")?.map { it.id to it.name }
+                    ?: withContext(Dispatchers.IO) { GamehubTv.cachedList(ctx, "people") }?.map { it.collection.removePrefix("person:") to it.title }
+                    ?: emptyList()
                 if (menu == null) return@launch
-                // People are tagged by id; the hub's /people list has both.
-                renderPeople(list.map { it.collection.removePrefix("person:") to it.title })
+                // People are tagged by id; both lists carry ids and names.
+                renderPeople(list, keep = false)
             }
         }
 
-        private fun renderPeople(all: List<Pair<String, String>>) {
-            rows { r ->
+        private fun renderPeople(all: List<Pair<String, String>>, keep: Boolean = true) {
+            rows(keep) { r ->
                 if (all.isEmpty()) r.add(row(ctx.getString(R.string.hold_people_none)) {})
                 for ((id, name) in all) {
                     val on = id in shot.peopleIds || (shot.peopleIds.isEmpty() && name in shot.people)
@@ -427,6 +442,69 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
             }
         }
 
+        // ── keywords ──────────────────────────────────────────────────────────────────
+
+        /** The presets plus every keyword in use (GET /keywords); toggled with A, saved at once. */
+        private fun keywords() = page {
+            rows { r -> r.add(row(ctx.getString(R.string.tv_loading_title)) {}) }
+            ctx.lifecycleScope.launch {
+                val res = withContext(Dispatchers.IO) { GamehubTv.keywords(ctx) }
+                if (res is GamehubTv.Res.Err && res.fail == GamehubTv.Fail.NOT_DEPLOYED) {
+                    // A hub without keywords: hide them quietly, no "update Gamehub" note.
+                    GamehubTv.Missing.mark(ctx, KEYWORDS)
+                    if (menu != null && stack.size > 1) back()
+                    return@launch
+                }
+                if (res is GamehubTv.Res.Ok) GamehubTv.Missing.clear(ctx, KEYWORDS)
+                if (menu == null) return@launch
+                val names = res.valueOrNull()?.map { it.name } ?: PRESET_KEYWORDS
+                renderKeywords(mergeNames(names, shot.keywords), keep = false)
+            }
+        }
+
+        private fun has(name: String) = shot.keywords.any { it.equals(name, ignoreCase = true) }
+
+        private fun renderKeywords(all: List<String>, keep: Boolean = true) {
+            rows(keep) { r ->
+                for (name in all) {
+                    val on = has(name)
+                    r.add(row(name, tag = if (on) "✓" else null) { toggleKeyword(name, all) })
+                }
+                r.add(row(ctx.getString(R.string.hold_keywords_new), tagColor = C.text3) { newKeyword(all) })
+            }
+        }
+
+        private fun toggleKeyword(name: String, all: List<String>) {
+            val wasOn = has(name)
+            val before = shot.keywords
+            shot.keywords = if (wasOn) before.filterNot { it.equals(name, ignoreCase = true) } else (before + name).sortedBy { it.lowercase() }
+            renderKeywords(all)
+            ctx.lifecycleScope.launch {
+                val r = withContext(Dispatchers.IO) { GamehubTv.setKeywords(ctx, shot.id, if (wasOn) emptyList() else listOf(name), if (wasOn) listOf(name) else emptyList()) }
+                when (r) {
+                    is GamehubTv.Res.Ok -> {
+                        r.value?.let { fresh -> shot.keywords = fresh.keywords }
+                        hc.changed(item, false)
+                    }
+                    is GamehubTv.Res.Err -> {
+                        shot.keywords = before
+                        failed(r)
+                    }
+                }
+                if (menu != null && stack.isNotEmpty()) renderKeywords(all)
+            }
+        }
+
+        private fun newKeyword(all: List<String>) {
+            ProfileOps.promptName(ctx, ctx.getString(R.string.hold_keywords_new), "") { raw ->
+                // The hub's rules: trimmed, at most 40 characters, no commas.
+                val name = raw.replace(",", " ").trim().replace(Regex("\\s+"), " ").take(40)
+                if (name.isEmpty() || menu == null) return@promptName
+                val list = mergeNames(all, listOf(name))
+                if (!has(name)) toggleKeyword(list.first { it.equals(name, ignoreCase = true) }, list) else renderKeywords(list)
+            }
+        }
+
         private fun info() = page {
             rows { r ->
                 fun line(label: Int, value: String?) { if (!value.isNullOrBlank()) r.add(row(value, hint = ctx.getString(label)) {}) }
@@ -435,6 +513,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
                 line(R.string.hold_info_source, sourceName(shot.source))
                 line(R.string.hold_info_size, if (shot.width > 0) "${shot.width} × ${shot.height}" else null)
                 line(R.string.hold_info_people, Fmt.people(shot.people))
+                line(R.string.hold_info_keywords, shot.keywords.joinToString(", "))
                 line(R.string.hold_info_note, shot.note)
             }
         }
@@ -526,6 +605,17 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
     companion object {
         const val HOLD_MS = HoldKeys.HOLD_MS
         const val RING_DP = 46
+        /** [GamehubTv.Missing] feature name for keywords (hub round 5). */
+        const val KEYWORDS = "keywords"
+
+        /** The hub's presets, in its order: shown when the list cannot be read. */
+        val PRESET_KEYWORDS = listOf("Vista", "Building", "Mood", "Action", "Character", "Night", "Funny", "Boss", "Photo mode")
+
+        /** [a] then whatever of [b] is not in it yet (case-insensitively), keeping [a]'s spelling. */
+        fun mergeNames(a: List<String>, b: List<String>): List<String> {
+            val seen = a.mapTo(HashSet()) { it.lowercase() }
+            return a + b.filter { seen.add(it.lowercase()) }
+        }
 
     }
 }
