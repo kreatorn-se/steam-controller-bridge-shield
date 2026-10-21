@@ -1,6 +1,10 @@
 package com.steamcontroller.android.uinput
 
 import android.content.Context
+import android.hardware.usb.UsbDevice
+import android.os.Binder
+import android.os.Bundle
+import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import com.steamcontroller.android.BuildConfig
@@ -34,6 +38,9 @@ class UInputService : IUInputService.Stub {
         private const val CLIENT_IDLE_TIMEOUT_MS = 90_000L
 
         private const val REVIVE_ACTION = "com.steamcontroller.android.action.REVIVE"
+
+        /** Valve: the only vendor whose devices [grantUsbPermission] will grant. */
+        private const val VALVE_VID = 0x28DE
         private const val REVIVE_RECEIVER = "com.steamcontroller.android.service.ReviveReceiver"
     }
 
@@ -45,7 +52,12 @@ class UInputService : IUInputService.Stub {
     @Suppress("unused")
     constructor(context: Context?) : super() {
         Log.i(TAG, "UInputService instantiated (Context=$context)")
+        // Shizuku hands us a context of the app's own package: its uid is the one client we serve.
+        appUid = try { context?.applicationInfo?.uid ?: -1 } catch (_: Throwable) { -1 }
     }
+
+    /** The app's uid when Shizuku gave us its context, else -1 (then checked by package name). */
+    private var appUid = -1
 
     // ── Client liveness watchdog ───────────────────────────────────────────────
     //
@@ -238,6 +250,65 @@ class UInputService : IUInputService.Stub {
                 apk.close()
             } catch (_: Throwable) {
             }
+        }
+    }
+
+    /**
+     * Grants the calling app USB access to one attached Valve device, as the shell uid (which
+     * holds MANAGE_USB on Android 11: frameworks/base/packages/Shell/AndroidManifest.xml), through
+     * the hidden IUsbManager - the same grant the system dialog makes, minus the dialog. The device
+     * is looked up by name in the system's own device list, so its vendor id is the real one, and
+     * the grant goes to the caller's uid only, after checking that uid is this app's.
+     */
+    override fun grantUsbPermission(deviceName: String?): Int {
+        touch()
+        if (deviceName.isNullOrEmpty()) return -1
+        val caller = Binder.getCallingUid()
+        if (!isOwnApp(caller)) {
+            Log.w(TAG, "USB grant refused: uid $caller is not ${BuildConfig.APPLICATION_ID}")
+            return -1
+        }
+        return try {
+            val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java)
+                .invoke(null, "usb") as? IBinder ?: return -1
+            val usb = Class.forName("android.hardware.usb.IUsbManager\$Stub").getMethod("asInterface", IBinder::class.java)
+                .invoke(null, binder) ?: return -1
+            val list = Bundle()
+            usb.javaClass.getMethod("getDeviceList", Bundle::class.java).invoke(usb, list)
+            list.classLoader = UsbDevice::class.java.classLoader
+            var dev: UsbDevice? = null
+            for (key in list.keySet()) {
+                @Suppress("DEPRECATION")
+                val d = list.getParcelable<UsbDevice>(key)
+                if (d != null && d.deviceName == deviceName) dev = d
+            }
+            if (dev == null) return 0
+            if (dev.vendorId != VALVE_VID) {
+                Log.w(TAG, "USB grant refused: ${dev.deviceName} is vendor 0x${dev.vendorId.toString(16)}, not Valve")
+                return 0
+            }
+            usb.javaClass.getMethod("grantDevicePermission", UsbDevice::class.java, Int::class.javaPrimitiveType)
+                .invoke(usb, dev, caller)
+            Log.i(TAG, "USB access granted to uid $caller for ${dev.deviceName} (pid 0x${dev.productId.toString(16)})")
+            1
+        } catch (t: Throwable) {
+            val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+            Log.w(TAG, "USB grant failed: ${cause.javaClass.simpleName}: ${cause.message}")
+            -1
+        }
+    }
+
+    /** [uid] is this app: the uid Shizuku's context names, or a uid whose packages include ours. */
+    private fun isOwnApp(uid: Int): Boolean {
+        if (appUid >= 0) return uid == appUid
+        return try {
+            val pm = Class.forName("android.app.ActivityThread").getMethod("getPackageManager").invoke(null) ?: return false
+            @Suppress("UNCHECKED_CAST")
+            val pkgs = pm.javaClass.getMethod("getPackagesForUid", Int::class.javaPrimitiveType).invoke(pm, uid) as? Array<String>
+            pkgs?.contains(BuildConfig.APPLICATION_ID) == true
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not check uid $uid: ${t.message}")
+            false
         }
     }
 

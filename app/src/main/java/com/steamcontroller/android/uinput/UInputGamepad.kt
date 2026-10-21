@@ -113,6 +113,20 @@ class UInputGamepad(
         return try { svc.installApk(apk, size) } catch (_: Throwable) { -1 }
     }
 
+    /**
+     * USB access for an attached Valve device, granted by the shell-uid service so Android does not
+     * ask after every reboot (UInputService.grantUsbPermission). Blocking binder call: off the
+     * main thread. 1 granted, 0 not an attached Valve device, -1 refused or failed, -2 the shell
+     * service is not connected (then the system's own prompt is the fallback).
+     */
+    fun grantUsbPermission(deviceName: String): Int {
+        val svc = service ?: return -2
+        return try { svc.grantUsbPermission(deviceName) } catch (_: Throwable) { -1 }
+    }
+
+    /** Called (on a worker thread) once the shell service is connected and set up. */
+    @Volatile var onShellReady: (() -> Unit)? = null
+
     /** Set by ControllerService to receive rumble commands from games. (strong, weak) ∈ [0, 65535]. */
     var onRumble: ((strong: Int, weak: Int) -> Unit)? = null
 
@@ -306,6 +320,11 @@ class UInputGamepad(
                         }
                     } catch (t: Throwable) {
                         Log.e(TAG, "init failed: ${t.message}")
+                    }
+                    try {
+                        onShellReady?.invoke()
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "shell-ready hook failed: ${t.message}")
                     }
                 }.start()
             }

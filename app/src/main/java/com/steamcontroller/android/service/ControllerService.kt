@@ -358,6 +358,9 @@ class ControllerService : Service() {
         // input path, on its own thread.
         com.steamcontroller.android.hub.Background.start(this, "service")
         uinput.onRumble = { strong, weak -> forwardRumble(strong, weak) }
+        // The shell service is up: let it grant USB access to the Valve devices attached, so the
+        // puck needs no "allow" prompt after a reboot, and pick up a device that was waiting.
+        uinput.onShellReady = { onShellReadyForUsb() }
         createNotificationChannel()
         _serviceStateFlow.value =
             _serviceStateFlow.value.copy(profileId = Prefs.getProfile(this).id)
@@ -864,6 +867,8 @@ class ControllerService : Service() {
             Log.e(TAG, "No Steam Controller found over USB")
             return false
         }
+        // At service start (and after a replug): access through the shell service, no prompt.
+        if (!usbManager.hasPermission(dev)) grantViaShell(dev)
         if (!usbManager.connect(dev)) {
             Log.e(TAG, "Failed to connect USB device")
             if (!usbManager.hasPermission(dev)) requestUsbPermission(dev)
@@ -1259,7 +1264,7 @@ class ControllerService : Service() {
             if (now - lastUsbScanAt < usbScanIntervalMs) return
             lastUsbScanAt = now
             val candidates = usbManager.findSteamControllers()
-            val ready = candidates.firstOrNull { usbManager.hasPermission(it) }
+            val ready = candidates.firstOrNull { usbManager.hasPermission(it) } ?: candidates.firstOrNull { grantViaShell(it) }
             if (ready != null) {
                 if (connectUsbLocked(ready, "device available again")) {
                     usbScanIntervalMs = USB_SCAN_MIN_MS
@@ -1384,6 +1389,36 @@ class ControllerService : Service() {
         if (alt != null) connectUsbLocked(alt, "${describe(dev)} gone, using ${describe(alt)}")
     }
 
+    /**
+     * USB access for a Valve device through the Shizuku shell service (UsbManager's own grant, as
+     * the shell uid that holds MANAGE_USB): no system prompt, so the puck is ready after every
+     * reboot. Only Valve devices, only for this app. False when the shell service is not connected
+     * or refuses; then [requestUsbPermission] shows the system prompt as before. Blocking: call
+     * off the main thread.
+     */
+    private fun grantViaShell(dev: UsbDevice): Boolean {
+        if (dev.vendorId != UsbConnectionManager.STEAM_VID) return false
+        if (usbManager.hasPermission(dev)) return true
+        val r = uinput.grantUsbPermission(dev.deviceName)
+        val ok = r == 1 && usbManager.hasPermission(dev)
+        if (r != -2) {
+            Log.i(TAG, "shell USB grant for ${describe(dev)}: result=$r access=$ok")
+            Diagnostics.record(TAG, "shell USB grant ${describe(dev)}: $r/$ok")
+        }
+        return ok
+    }
+
+    /** The shell service connected (service start): grant every attached Valve device, then connect. */
+    private fun onShellReadyForUsb() {
+        scope.launch(Dispatchers.IO) {
+            val devices = usbManager.findSteamControllers()
+            val granted = devices.filter { !usbManager.hasPermission(it) }.count { grantViaShell(it) }
+            if (granted > 0 && initializedTransport == Transport.USB && usbManager.device == null) {
+                reinitUsb(null, "USB access granted by the shell service")
+            }
+        }
+    }
+
     private fun requestUsbPermission(dev: UsbDevice) {
         val added = synchronized(usbPermissionRequested) { usbPermissionRequested.add(dev.deviceName) }
         if (!added) return
@@ -1432,7 +1467,7 @@ class ControllerService : Service() {
                             usbMutex.withLock {
                                 // A working link stays; the supervisor moves over if it goes silent.
                                 if (usbManager.device != null && controllerOnline.get()) return@withLock
-                                if (usbManager.hasPermission(dev)) {
+                                if (usbManager.hasPermission(dev) || grantViaShell(dev)) {
                                     connectUsbLocked(dev, "${describe(dev)} attached")
                                 } else {
                                     requestUsbPermission(dev)

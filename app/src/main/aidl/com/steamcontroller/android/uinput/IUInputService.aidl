@@ -49,4 +49,11 @@ interface IUInputService {
     int installApk(in ParcelFileDescriptor apk, long size);
 
     void destroy();
+
+    // USB access without the system prompt after every reboot: grants the calling app (its own
+    // uid, never another) permission for the attached device named [deviceName], and only if that
+    // device is Valve's (vendor 0x28DE). Uses the shell uid's MANAGE_USB through the hidden
+    // IUsbManager.grantDevicePermission. Returns 1 when granted, 0 when there is no such Valve
+    // device, -1 when refused or failed. Last in the file, so earlier transaction codes stay put.
+    int grantUsbPermission(String deviceName);
 }
