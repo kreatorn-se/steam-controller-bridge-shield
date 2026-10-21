@@ -49,11 +49,14 @@ import kotlinx.coroutines.withContext
  *
  *  - pictures at native fit: contained, centred, never scaled past the screen and still unless
  *    "Slow zoom" is switched on (off by default; [TvPrefs.slowZoom])
- *  - the game's official logo small in the bottom-right corner the whole time (its name in
- *    condensed capitals when there is no logo); it changes only when the game does
- *  - the caption (date, people, favourite) fades out after a few seconds
+ *  - only the picture and the game's official logo small in the bottom-right corner (its name in
+ *    condensed capitals when there is no logo); it changes only when the game does. "Game logo on
+ *    large images" ([TvPrefs.showLogo], on by default) switches it off for a completely clean
+ *    picture; the screensaver shows it smaller and dimmer when it is on. No date, time or people
+ *    on the picture: those are under Info in the hold menu. Y flashes a heart and nothing stays.
  *  - OK or Play/Pause: a small control bar (previous, play/pause, next, time per picture,
- *    favourite, slow zoom), D-pad driven, hiding after 5 s while playing and staying while paused
+ *    favourite, slow zoom, logo), D-pad driven, hiding after 5 s while playing and staying while
+ *    paused; the logo lifts above it while it is up
  *  - ↓ a filmstrip of small thumbnails to jump in time, ↓ again a grid of larger ones;
  *    ↑ or B one step back (grid → filmstrip → picture → close), LB/RB step like ←/→
  *  - LT/RT the previous/next collection, Y favourite at any stage, +/− time per picture
@@ -87,10 +90,6 @@ class ShowMode(
     private val imgA = ImageView(ctx)
     private val imgB = ImageView(ctx)
     private var front = imgA
-    private val bottomScrim = View(ctx)
-    private val caption = LinearLayout(ctx)
-    private val capMeta = Kit.body(ctx, "", 17f, C.text2)
-    private val capHeart = ImageView(ctx)
     private val hud = LinearLayout(ctx)
     private val hudState = Kit.label(ctx, "", 12f, C.text)
     private val collCard = LinearLayout(ctx)
@@ -107,6 +106,8 @@ class ShowMode(
     private val logoName = Kit.label(ctx, "", 15f, C.text)
     private var logoGame: String? = null
     private var logoToken = 0
+    /** [TvPrefs.showLogo], read once and changed from the bar. */
+    private var logoOn = TvPrefs.showLogo(act)
 
     // The control bar.
     private val bar = LinearLayout(ctx)
@@ -135,7 +136,6 @@ class ShowMode(
     /** The screensaver: any input closes it, and the waking input goes nowhere else. */
     val isCalm: Boolean get() = calm && !closed
     private var interval = req.intervalSec?.coerceIn(3, 600) ?: TvPrefs.interval(ctx)
-    private var captionShown = false
     private var collToken = 0
     private var imgToken = 0
     private var kb: Animator? = null
@@ -167,24 +167,9 @@ class ShowMode(
         }
         root.addView(layers, match())
 
-        bottomScrim.background = Scrim(intArrayOf(0, C.alpha(0xFF000000.toInt(), 0.55f), C.alpha(0xFF000000.toInt(), 0.82f)), floatArrayOf(0f, 0.55f, 1f))
-        bottomScrim.alpha = 0f
-        root.addView(bottomScrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (screenH * 0.42f).toInt(), Gravity.BOTTOM))
-
+        // Nothing else sits on the picture: the corner logo is all (date, time and people are
+        // under Info in the hold menu).
         buildLogo()
-
-        caption.orientation = LinearLayout.HORIZONTAL
-        caption.gravity = Gravity.CENTER_VERTICAL
-        caption.alpha = 0f
-        capHeart.setImageResource(R.drawable.ic_heart_fill)
-        capHeart.visibility = View.GONE
-        caption.addView(capHeart, LinearLayout.LayoutParams(ctx.dp(18), ctx.dp(18)).apply { marginEnd = ctx.dp(8) })
-        capMeta.maxLines = 1
-        capMeta.setShadowLayer(ctx.dp(8f), 0f, 0f, 0x99000000.toInt())
-        caption.addView(capMeta)
-        root.addView(caption, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START).apply {
-            marginStart = safeH; bottomMargin = safeV + ctx.dp(14)
-        })
 
         // Top right: only while paused (and the bar is not up) or just after a change.
         hud.orientation = LinearLayout.HORIZONTAL
@@ -243,6 +228,13 @@ class ShowMode(
         root.addView(logoBox, FrameLayout.LayoutParams(ctx.dp(LOGO_W + 80), ctx.dp(LOGO_H), Gravity.BOTTOM or Gravity.END).apply {
             marginEnd = safeH; bottomMargin = safeV + ctx.dp(8)
         })
+        if (calm) {
+            // The screensaver's logo: smaller, anchored in the same corner (and dimmer, see revealLogo).
+            logoBox.pivotX = ctx.dp(LOGO_W + 80).toFloat(); logoBox.pivotY = ctx.dp(LOGO_H).toFloat()
+            logoBox.scaleX = ShowKeys.LOGO_SCALE_CALM; logoBox.scaleY = ShowKeys.LOGO_SCALE_CALM
+            logoShade.pivotX = ctx.dp(LOGO_W + 260).toFloat(); logoShade.pivotY = ctx.dp(LOGO_H + 150).toFloat()
+            logoShade.scaleX = ShowKeys.LOGO_SCALE_CALM; logoShade.scaleY = ShowKeys.LOGO_SCALE_CALM
+        }
     }
 
     private fun buildBar() {
@@ -267,6 +259,7 @@ class ShowMode(
         add(Ctl.TIMER, BarButton(ctx, R.drawable.ic_timer, 48, 18, withText = true))
         add(Ctl.FAV, BarButton(ctx, R.drawable.ic_heart, 48, 22))
         add(Ctl.ZOOM, BarButton(ctx, R.drawable.ic_zoom, 48, 18, withText = true))
+        add(Ctl.LOGO, BarButton(ctx, R.drawable.ic_logo_corner, 48, 18, withText = true))
         bar.visibility = View.GONE
         root.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
             bottomMargin = safeV + ctx.dp(6)
@@ -349,7 +342,7 @@ class ShowMode(
         root.requestFocus()
         openColl(collIndex, req.startShotId, req.preload, req.preloadNext, announce = false)
         setKeepOn()
-        if (!calm && GameArt.isEmpty) learnLogos()
+        if ((!calm || logoOn) && GameArt.isEmpty) learnLogos()
     }
 
     /** Logos come from the games list; read the saved one (or ask the hub) off the main thread. */
@@ -545,7 +538,6 @@ class ShowMode(
         message.visibility = View.VISIBLE
         imgA.setImageDrawable(null); imgB.setImageDrawable(null)
         backdrop.alpha = 0f
-        caption.alpha = 0f; bottomScrim.alpha = 0f
         logoBox.alpha = 0f; logoShade.alpha = 0f; logoGame = null
         refreshThumbs()
     }
@@ -566,7 +558,6 @@ class ShowMode(
             }
             present(back, bmp, shot, token, if (calm) 1600L else if (manual) 280L else if (fade) 900L else 1L)
         }
-        updateCaption(shot, manual)
         updateLogo(shot)
         updateHud()
         renderBar()
@@ -654,11 +645,15 @@ class ShowMode(
         }
     }
 
-    // ── logo, caption and HUD ─────────────────────────────────────────────────────────
+    // ── logo and HUD ──────────────────────────────────────────────────────────────────
 
-    /** The game's logo, changed (with a short crossfade) only when the game changes. */
+    /**
+     * The game's logo, changed (with a short crossfade) only when the game changes. Loaded even
+     * while the setting is off in show mode, so the bar's toggle shows it at once; the screensaver
+     * (where no key can change the setting) skips it entirely when off.
+     */
     private fun updateLogo(shot: Shot) {
-        if (calm) return
+        if (calm && !logoOn) return
         val game = shot.gameOrUnknown()
         if (game == logoGame) return
         logoGame = game
@@ -687,58 +682,31 @@ class ShowMode(
         }
         if (logoBox.alpha > 0.05f) {
             logoBox.animate().cancel()
-            logoBox.animate().alpha(0f).setDuration(Motion.FAST).setInterpolator(AccelerateInterpolator()).withEndAction { if (token == logoToken) fill() }.start()
+            logoBox.animate().alpha(0f).setDuration(if (calm) Motion.SLOW else Motion.FAST).setInterpolator(AccelerateInterpolator()).withEndAction { if (token == logoToken) fill() }.start()
         } else fill()
     }
 
-    private fun logoVisible() = !calm && logoGame != null && (stage == Stage.PICTURE || stage == Stage.BAR) && message.visibility != View.VISIBLE
-
     private fun revealLogo() {
-        val a = if (logoVisible()) 0.94f else 0f
+        val a = ShowKeys.logoAlpha(logoOn, calm, stage, logoGame != null, message.visibility == View.VISIBLE)
+        val ms = if (calm) 1600L else Motion.SLOW * 2
         logoBox.animate().cancel()
-        // Up with the caption while the control bar is shown, so the two never touch.
-        logoBox.animate().alpha(a).translationY(captionLift()).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
+        // Up above the control bar while it is shown, so the two never touch.
+        logoBox.animate().alpha(a).translationY(barLift()).setDuration(ms).setInterpolator(DecelerateInterpolator()).start()
         logoShade.animate().cancel()
-        logoShade.animate().alpha(if (a > 0f) 1f else 0f).setDuration(Motion.SLOW * 2).start()
+        logoShade.animate().alpha(if (a > 0f) (if (calm) 0.6f else 1f) else 0f).setDuration(ms).start()
     }
 
-    private fun updateCaption(shot: Shot, manual: Boolean) {
-        if (calm) return
-        capHeart.visibility = if (shot.favorite) View.VISIBLE else View.GONE
-        val meta = Fmt.meta(shot)
-        if (capMeta.text.toString() != meta) {
-            // The date updates in place; the game is the corner logo's job.
-            if (captionShown && caption.alpha > 0.05f) {
-                capMeta.animate().cancel()
-                capMeta.animate().alpha(0f).setDuration(Motion.FAST).withEndAction {
-                    capMeta.text = meta
-                    capMeta.animate().alpha(1f).setDuration(Motion.BASE).start()
-                }.start()
-            } else capMeta.text = meta
-        }
-        if (manual || !captionShown) showCaption()
-    }
+    /**
+     * The logo moves up above the control bar while it is shown: the bar is 74dp tall from
+     * safeV + 6dp and the logo sits at safeV + 8dp, so 84dp leaves a 10dp gap.
+     */
+    private fun barLift(): Float = if (stage == Stage.BAR) -ctx.dp(84f) else 0f
 
-    private fun showCaption() {
-        if (calm) return
-        captionShown = true
-        val inStrip = stage == Stage.STRIP || stage == Stage.GRID
-        if (!inStrip) {
-            caption.animate().cancel()
-            caption.animate().alpha(1f).translationY(captionLift()).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
-            bottomScrim.animate().alpha(1f).setDuration(Motion.SLOW * 2).start()
-        }
-        handler.removeCallbacks(hideCaption)
-        if (playing && stage != Stage.BAR) handler.postDelayed(hideCaption, CAPTION_MS)
-    }
-
-    /** The caption and the logo move up above the control bar while it is shown. */
-    private fun captionLift(): Float = if (stage == Stage.BAR) -ctx.dp(66f) else 0f
-
-    private val hideCaption = Runnable {
-        captionShown = false
-        caption.animate().alpha(0f).setDuration(700L).start()
-        bottomScrim.animate().alpha(0f).setDuration(700L).start()
+    /** The bar's logo control: switch the corner logo (and the setting) on or off. */
+    private fun toggleLogo() {
+        logoOn = !logoOn
+        TvPrefs.setShowLogo(ctx, logoOn)
+        if (logoOn && logoGame == null) items.getOrNull(index)?.let { updateLogo(it) } else revealLogo()
     }
 
     /** One quiet pill: "Paused" while paused and the bar is not up, nothing while playing. */
@@ -769,11 +737,8 @@ class ShowMode(
         if (on) {
             kb?.resume()
             if (stage == Stage.PICTURE || stage == Stage.BAR) handler.postDelayed(advance, interval * 1000L)
-            if (stage != Stage.BAR) handler.postDelayed(hideCaption, 2500L)
         } else {
             kb?.pause()
-            handler.removeCallbacks(hideCaption)
-            if (stage == Stage.PICTURE) showCaption()
         }
         updateHud()
         renderBar()
@@ -797,6 +762,7 @@ class ShowMode(
         ctlViews[Ctl.FAV]?.setIcon(if (fav) R.drawable.ic_heart_fill else R.drawable.ic_heart, if (fav) C.danger else C.text)
         val zoom = TvPrefs.slowZoom(ctx)
         ctlViews[Ctl.ZOOM]?.setText(ctx.getString(if (zoom) R.string.show_zoom_on else R.string.show_zoom_off), if (zoom) C.accent else C.text2)
+        ctlViews[Ctl.LOGO]?.setText(ctx.getString(if (logoOn) R.string.show_logo_on else R.string.show_logo_off), if (logoOn) C.accent else C.text2)
         for ((c, v) in ctlViews) v.setSelectedState(stage == Stage.BAR && c == barSel)
         ctlViews[Ctl.PLAY]?.contentDescription = ctx.getString(if (playing) R.string.show_paused else R.string.show_playing)
     }
@@ -812,6 +778,7 @@ class ShowMode(
                 TvPrefs.setSlowZoom(ctx, !TvPrefs.slowZoom(ctx))
                 startKenBurns(front)
             }
+            Ctl.LOGO -> toggleLogo()
         }
         renderBar()
     }
@@ -836,8 +803,8 @@ class ShowMode(
         val shot = items.getOrNull(i) ?: return
         val on = !shot.favorite
         shot.favorite = on
+        // A brief flash in the middle; nothing stays on the picture (the bar and thumbnails show it).
         burst(on)
-        if (i == index) capHeart.visibility = if (on) View.VISIBLE else View.GONE
         strip.adapter?.notifyItemChanged(i)
         grid.adapter?.notifyItemChanged(i)
         renderBar()
@@ -846,7 +813,6 @@ class ShowMode(
             if (r is GamehubTv.Res.Err) {
                 shot.favorite = !on
                 if (!closed) {
-                    if (items.getOrNull(index)?.id == shot.id) capHeart.visibility = if (shot.favorite) View.VISIBLE else View.GONE
                     strip.adapter?.notifyItemChanged(i)
                     grid.adapter?.notifyItemChanged(i)
                     renderBar()
@@ -878,12 +844,9 @@ class ShowMode(
             Stage.PICTURE -> {
                 fade(stripPanel, false); fade(gridPanel, false); fade(bar, false, slide = true)
                 if (sel != index && items.isNotEmpty()) { index = sel; showCurrent(manual = true) }
-                else if (from == Stage.BAR) {
-                    // The bar went away: the picture and its clock carry on untouched.
-                    caption.animate().translationY(0f).setDuration(Motion.SLOW).start()
-                    if (playing) { handler.removeCallbacks(hideCaption); handler.postDelayed(hideCaption, 2500L) }
-                } else {
-                    showCaption()
+                else if (from != Stage.BAR) {
+                    // Back from the filmstrip or grid on the same picture: its clock starts again.
+                    // (When the bar goes away the picture and its clock carry on untouched.)
                     if (playing) { handler.removeCallbacks(advance); handler.postDelayed(advance, interval * 1000L) }
                 }
             }
@@ -891,7 +854,6 @@ class ShowMode(
                 fade(stripPanel, false); fade(gridPanel, false)
                 renderBar()
                 fade(bar, true, slide = true)
-                showCaption()
                 lastInput = SystemClock.uptimeMillis()
                 scheduleBarHide()
             }
@@ -900,8 +862,6 @@ class ShowMode(
                 if (from == Stage.PICTURE || from == Stage.BAR) sel = index
                 fade(bar, false, slide = true)
                 fade(gridPanel, false)
-                caption.animate().alpha(0f).translationY(0f).setDuration(Motion.BASE).start()
-                bottomScrim.animate().alpha(0f).setDuration(Motion.BASE).start()
                 refreshThumbs()
                 fade(stripPanel, true, slide = true)
                 scrollStrip(immediate = true)
@@ -1140,8 +1100,6 @@ class ShowMode(
                     showCurrent(manual = true)
                 }
             } else {
-                val cur = items.getOrNull(index)
-                if (cur != null) capHeart.visibility = if (cur.favorite) View.VISIBLE else View.GONE
                 refreshThumbs()
                 renderBar()
             }
@@ -1161,7 +1119,6 @@ class ShowMode(
     }
 
     private companion object {
-        const val CAPTION_MS = 4500L
         const val MORE_BACKOFF_MS = 30_000L
         const val LOGO_W = 210
         const val LOGO_H = 64

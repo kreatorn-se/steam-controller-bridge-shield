@@ -80,7 +80,9 @@ class ShowKeysTest {
         assertEquals(Ctl.PREV, ShowKeys.move(Ctl.PLAY, -1))
         assertEquals(Ctl.PREV, ShowKeys.move(Ctl.PREV, -1))
         assertEquals(Ctl.ZOOM, ShowKeys.move(Ctl.FAV, 1))
-        assertEquals(Ctl.ZOOM, ShowKeys.move(Ctl.ZOOM, 1))
+        assertEquals(Ctl.LOGO, ShowKeys.move(Ctl.ZOOM, 1))
+        assertEquals(Ctl.LOGO, ShowKeys.move(Ctl.LOGO, 1))
+        assertEquals(Ctl.ZOOM, ShowKeys.move(Ctl.LOGO, -1))
     }
 
     @Test fun timerSteps() {
@@ -99,5 +101,22 @@ class ShowKeysTest {
         assertFalse(ShowKeys.barExpired(now = 4_999, lastInput = 0, playing = true))
         assertTrue(ShowKeys.barExpired(now = 5_000, lastInput = 0, playing = true))
         assertFalse(ShowKeys.barExpired(now = 60_000, lastInput = 0, playing = false))
+    }
+
+    @Test fun logoOnlyWhenSwitchedOnAndOnThePicture() {
+        // On: full on the picture and with the bar, dimmer on the screensaver.
+        assertEquals(ShowKeys.LOGO_ALPHA, ShowKeys.logoAlpha(true, false, Stage.PICTURE, hasGame = true, message = false), 0f)
+        assertEquals(ShowKeys.LOGO_ALPHA, ShowKeys.logoAlpha(true, false, Stage.BAR, hasGame = true, message = false), 0f)
+        assertEquals(ShowKeys.LOGO_ALPHA_CALM, ShowKeys.logoAlpha(true, true, Stage.PICTURE, hasGame = true, message = false), 0f)
+        assertTrue(ShowKeys.LOGO_ALPHA_CALM < ShowKeys.LOGO_ALPHA)
+        assertTrue(ShowKeys.LOGO_SCALE_CALM < 1f)
+        // Off: the picture is completely clean, show mode and screensaver alike.
+        for (stage in Stage.values()) for (calm in listOf(false, true))
+            assertEquals(0f, ShowKeys.logoAlpha(false, calm, stage, hasGame = true, message = false), 0f)
+        // Never over the filmstrip or grid, a message, or before the game is known.
+        assertEquals(0f, ShowKeys.logoAlpha(true, false, Stage.STRIP, hasGame = true, message = false), 0f)
+        assertEquals(0f, ShowKeys.logoAlpha(true, false, Stage.GRID, hasGame = true, message = false), 0f)
+        assertEquals(0f, ShowKeys.logoAlpha(true, false, Stage.PICTURE, hasGame = true, message = true), 0f)
+        assertEquals(0f, ShowKeys.logoAlpha(true, true, Stage.PICTURE, hasGame = false, message = false), 0f)
     }
 }

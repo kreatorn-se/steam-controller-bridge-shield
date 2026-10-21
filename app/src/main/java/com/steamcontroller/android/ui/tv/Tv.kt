@@ -25,6 +25,12 @@ object TvPrefs {
      */
     fun slowZoom(c: Context): Boolean = p(c).getBoolean("slow_zoom", false)
     fun setSlowZoom(c: Context, on: Boolean) = p(c).edit().putBoolean("slow_zoom", on).apply()
+    /**
+     * The game's logo in the corner of large pictures (show mode, and smaller and dimmer on the
+     * screensaver). On unless switched off; off leaves the picture completely clean.
+     */
+    fun showLogo(c: Context): Boolean = p(c).getBoolean("show_logo", true)
+    fun setShowLogo(c: Context, on: Boolean) = p(c).edit().putBoolean("show_logo", on).apply()
 }
 
 /** Capture dates in the time zone they were taken in. */

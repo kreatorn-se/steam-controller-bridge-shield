@@ -40,6 +40,7 @@ class GamehubPage(host: Host) : Page(host) {
     private val bootCard = Kit.card(ctx, 22)
     private val tvCard = Kit.card(ctx, 22)
     private lateinit var zoomRow: ToggleRow
+    private lateinit var logoRow: ToggleRow
     private lateinit var satRow: ChoiceRow
     private val testResult = Kit.body(ctx, ctx.getString(R.string.hub_test_hint), 13f, C.text2)
     private var focusFirst: View? = null
@@ -76,8 +77,8 @@ class GamehubPage(host: Host) : Page(host) {
         }
     }
 
-    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); satRow.refresh() }
-    override fun onShow() { renderLink(); zoomRow.refresh(); satRow.refresh() }
+    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh() }
+    override fun onShow() { renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh() }
 
     override fun onFrame(f: LiveFrame) {
         val now = android.os.SystemClock.uptimeMillis()
@@ -226,6 +227,9 @@ class GamehubPage(host: Host) : Page(host) {
         zoomRow = ToggleRow(ctx, ctx.getString(R.string.hub_slow_zoom), ctx.getString(R.string.hub_slow_zoom_hint),
             { com.steamcontroller.android.ui.tv.TvPrefs.slowZoom(ctx) }, { com.steamcontroller.android.ui.tv.TvPrefs.setSlowZoom(ctx, it) })
         tvCard.addView(zoomRow, Kit.lp(t = 10, ctx = ctx))
+        logoRow = ToggleRow(ctx, ctx.getString(R.string.hub_show_logo), ctx.getString(R.string.hub_show_logo_hint),
+            { com.steamcontroller.android.ui.tv.TvPrefs.showLogo(ctx) }, { com.steamcontroller.android.ui.tv.TvPrefs.setShowLogo(ctx, it) })
+        tvCard.addView(logoRow)
         // Applied when a capture is saved (CaptureLevels); select cycles Off → 6 → 12 → 18 → 25 %.
         val sats = LevelsMath.SATURATION_CHOICES
         satRow = ChoiceRow(ctx, ctx.getString(R.string.hub_capture_sat), ctx.getString(R.string.hub_capture_sat_hint),

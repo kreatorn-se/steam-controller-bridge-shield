@@ -333,6 +333,8 @@
     <string name="hub_tv">Slideshow on this TV</string>
     <string name="hub_slow_zoom">Slow zoom</string>
     <string name="hub_slow_zoom_hint">Gently zoom pictures in the slideshow, the screensaver and the home hero. Off shows every picture still, at its native fit.</string>
+    <string name="hub_show_logo">Game logo on large images</string>
+    <string name="hub_show_logo_hint">The game\'s logo small in the corner of the slideshow and full-screen pictures, and smaller and dimmer on the screensaver. Off shows the picture alone.</string>
     <string name="hub_capture_sat">Capture colour boost</string>
     <string name="hub_capture_sat_hint">Extra saturation added to screenshots as they are saved, so they look as vivid as the TV. Off keeps the colours as captured.</string>
     <string name="hub_capture_sat_off">Off</string>
@@ -392,6 +394,8 @@
     <string name="show_seconds">%1$d s</string>
     <string name="show_zoom_on">Slow zoom on</string>
     <string name="show_zoom_off">Slow zoom off</string>
+    <string name="show_logo_on">Logo on</string>
+    <string name="show_logo_off">Logo off</string>
 
     <!-- ━━━━━━━━━━━━ Import ━━━━━━━━━━━━ -->
     <string name="imp_eyebrow">Steam screenshots</string>

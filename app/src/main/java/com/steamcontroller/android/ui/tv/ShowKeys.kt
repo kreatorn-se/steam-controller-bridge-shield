@@ -6,8 +6,9 @@ import android.view.KeyEvent
  * Show mode's key routing and control-bar rules, kept free of views so the conflicts between the
  * picture, the control bar, the filmstrip and the grid can be tested as plain key sequences.
  *
- * - Picture: ←/→ and LB/RB step, ↓ the filmstrip, ↑ closes, OK (a tap) opens the control bar,
- *   Play/Pause toggles playback and shows the bar.
+ * - Picture (only the picture and the game's logo on screen): ←/→ and LB/RB step, ↓ the
+ *   filmstrip, ↑ closes, OK (a tap) opens the control bar, Play/Pause toggles playback and shows
+ *   the bar. The bar's last control switches the corner logo on and off.
  * - Control bar: ←/→ move along it, OK presses the selected control, LB/RB still step pictures,
  *   ↓ goes on to the filmstrip, ↑ / B / Menu hide the bar.
  * - Filmstrip and grid: as before (←/→ select, ↓ grid, ↑ / B one step back, OK jumps).
@@ -45,7 +46,7 @@ object ShowKeys {
     }
 
     /** The controls on the bar, left to right. */
-    enum class Ctl { PREV, PLAY, NEXT, TIMER, FAV, ZOOM }
+    enum class Ctl { PREV, PLAY, NEXT, TIMER, FAV, ZOOM, LOGO }
 
     /** Where the bar's selection lands when it opens. */
     val DEFAULT_CTL = Ctl.PLAY
@@ -147,4 +148,22 @@ object ShowKeys {
 
     /** Whether the bar should hide now: only while playing, [BAR_HIDE_MS] after the last input. */
     fun barExpired(now: Long, lastInput: Long, playing: Boolean): Boolean = playing && now - lastInput >= BAR_HIDE_MS
+
+    /** The corner logo's opacity in show mode; the screensaver's is smaller and dimmer. */
+    const val LOGO_ALPHA = 0.94f
+    const val LOGO_ALPHA_CALM = 0.55f
+    /** The screensaver's logo is drawn at this scale, anchored in the corner. */
+    const val LOGO_SCALE_CALM = 0.72f
+
+    /**
+     * How opaque the corner logo is: nothing when the setting is off, there is no game yet or a
+     * message (loading, offline) has the screen, or the filmstrip or grid is up; otherwise full
+     * on the picture and with the control bar, dimmer on the screensaver.
+     */
+    fun logoAlpha(enabled: Boolean, calm: Boolean, stage: Stage, hasGame: Boolean, message: Boolean): Float = when {
+        !enabled || !hasGame || message -> 0f
+        stage == Stage.STRIP || stage == Stage.GRID -> 0f
+        calm -> LOGO_ALPHA_CALM
+        else -> LOGO_ALPHA
+    }
 }
