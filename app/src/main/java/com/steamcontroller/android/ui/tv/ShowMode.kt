@@ -696,7 +696,8 @@ class ShowMode(
     private fun revealLogo() {
         val a = if (logoVisible()) 0.94f else 0f
         logoBox.animate().cancel()
-        logoBox.animate().alpha(a).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
+        // Up with the caption while the control bar is shown, so the two never touch.
+        logoBox.animate().alpha(a).translationY(captionLift()).setDuration(Motion.SLOW * 2).setInterpolator(DecelerateInterpolator()).start()
         logoShade.animate().cancel()
         logoShade.animate().alpha(if (a > 0f) 1f else 0f).setDuration(Motion.SLOW * 2).start()
     }
@@ -731,7 +732,7 @@ class ShowMode(
         if (playing && stage != Stage.BAR) handler.postDelayed(hideCaption, CAPTION_MS)
     }
 
-    /** The caption moves up above the control bar while it is shown. */
+    /** The caption and the logo move up above the control bar while it is shown. */
     private fun captionLift(): Float = if (stage == Stage.BAR) -ctx.dp(66f) else 0f
 
     private val hideCaption = Runnable {
