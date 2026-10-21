@@ -141,6 +141,9 @@ class ControllerService : Service() {
         /** Re-open attempts of an attached-but-closed device: 2 s, doubling to 30 s. */
         private const val USB_SCAN_MIN_MS = 2000L
         private const val USB_SCAN_MAX_MS = 30_000L
+        /** How long a USB prompt waits for Shizuku to bring up the shell service: 8 × 500 ms. */
+        private const val SHELL_WAIT_STEPS = 8
+        private const val SHELL_WAIT_STEP_MS = 500L
 
         /** A device opened this recently is not re-opened by a second event for the same plug-in. */
         private const val USB_REOPEN_GUARD_MS = 2000L
@@ -1273,6 +1276,8 @@ class ControllerService : Service() {
                 }
             } else {
                 candidates.firstOrNull()?.let { requestUsbPermission(it) }
+                // Nothing usable: rescan less and less often (an attach resets this).
+                usbScanIntervalMs = (usbScanIntervalMs * 2).coerceAtMost(USB_SCAN_MAX_MS)
             }
             return
         }
@@ -1401,12 +1406,18 @@ class ControllerService : Service() {
         if (usbManager.hasPermission(dev)) return true
         val r = uinput.grantUsbPermission(dev.deviceName)
         val ok = r == 1 && usbManager.hasPermission(dev)
-        if (r != -2) {
+        // Logged once per device and outcome, not on every rescan.
+        val outcome = "$r/$ok"
+        val changed = synchronized(shellGrantSeen) { shellGrantSeen.put(dev.deviceName, outcome) != outcome }
+        if (r != -2 && changed) {
             Log.i(TAG, "shell USB grant for ${describe(dev)}: result=$r access=$ok")
-            Diagnostics.record(TAG, "shell USB grant ${describe(dev)}: $r/$ok")
+            Diagnostics.record(TAG, "shell USB grant ${describe(dev)}: $outcome")
         }
         return ok
     }
+
+    /** The last shell-grant outcome per device name, so it is logged only when it changes. */
+    private val shellGrantSeen = HashMap<String, String>()
 
     /** The shell service connected (service start): grant every attached Valve device, then connect. */
     private fun onShellReadyForUsb() {
@@ -1422,6 +1433,27 @@ class ControllerService : Service() {
     private fun requestUsbPermission(dev: UsbDevice) {
         val added = synchronized(usbPermissionRequested) { usbPermissionRequested.add(dev.deviceName) }
         if (!added) return
+        // Shizuku is still bringing the shell service up (right after boot): give it a few
+        // seconds to grant access before showing the system prompt, which would then be moot.
+        if (uinput.isShellBinding) {
+            scope.launch(Dispatchers.IO) {
+                for (i in 0 until SHELL_WAIT_STEPS) {
+                    delay(SHELL_WAIT_STEP_MS)
+                    if (!uinput.isShellBinding) break
+                }
+                if (usbManager.hasPermission(dev) || grantViaShell(dev)) {
+                    if (usbManager.device == null) reinitUsb(dev, "USB access granted by the shell service")
+                } else {
+                    showUsbPrompt(dev)
+                }
+            }
+            return
+        }
+        showUsbPrompt(dev)
+    }
+
+    /** The system's own "allow access" prompt: the fallback without the shell service. */
+    private fun showUsbPrompt(dev: UsbDevice) {
         try {
             val pi =
                 PendingIntent.getBroadcast(
@@ -1479,6 +1511,10 @@ class ControllerService : Service() {
                     ACTION_USB_PERMISSION -> {
                         if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                             scope.launch(Dispatchers.IO) { reinitUsb(dev, "USB permission granted") }
+                        } else if (usbManager.hasPermission(dev)) {
+                            // The shell service granted access meanwhile: the prompt's "deny" is moot.
+                            Log.i(TAG, "prompt answered no, but ${describe(dev)} already has access")
+                            scope.launch(Dispatchers.IO) { reinitUsb(dev, "USB access granted by the shell service") }
                         } else {
                             Pill.show(this@ControllerService, Pill.Kind.FAILED, "USB ACCESS DENIED")
                         }

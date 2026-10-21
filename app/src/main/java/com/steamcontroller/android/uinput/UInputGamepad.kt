@@ -124,7 +124,10 @@ class UInputGamepad(
         return try { svc.grantUsbPermission(deviceName) } catch (_: Throwable) { -1 }
     }
 
-    /** Called (on a worker thread) once the shell service is connected and set up. */
+    /** Bound to the shell service but not connected yet (Shizuku is still starting it). */
+    val isShellBinding: Boolean get() = bound && service == null
+
+        /** Called (on a worker thread) once the shell service is connected and set up. */
     @Volatile var onShellReady: (() -> Unit)? = null
 
     /** Set by ControllerService to receive rumble commands from games. (strong, weak) ∈ [0, 65535]. */
