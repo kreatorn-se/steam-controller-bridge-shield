@@ -28,10 +28,17 @@ import java.util.concurrent.TimeUnit
  *
  * - Nothing is decoded larger than needed: inSampleSize gets within 2× of the target and inDensity
  *   scaling does the rest during the decode, so a 4K original costs a screen-sized bitmap.
+ * - Nothing is decoded smaller than it is drawn either: a [Spec] is the view's real pixel size at
+ *   the 85 % TV density, times its focus scale, and with [Spec.h] the image covers that box the
+ *   way CENTER_CROP draws it (a 21:9 capture in a 16:9 card is sized by its height). A source too
+ *   small for that (an old low-res preview) is replaced by the [full] image when one is given,
+ *   instead of being stretched.
+ * - Cache keys are the URL exactly as the hub gives it, `?v=<width>` included: when the hub
+ *   replaces a small preview with a sharp one the URL changes, and so does every key.
  * - Three queues so prefetching never starves what is on screen: visible requests on a LIFO pool
  *   (what was asked for last is what is on screen now), originals on one dedicated thread, and
  *   prefetches on one background-priority thread.
- * - Two disk caches: previews/art (cacheDir/img, 320 MB) and originals (cacheDir/img-full,
+ * - Two disk caches: previews/art (cacheDir/img2, 320 MB) and originals (cacheDir/img-full,
  *   200 MB), so a long slideshow of originals never pushes out the thumbnails.
  * - Activity views get HARDWARE bitmaps (graphics memory, not the Java heap); the screensaver
  *   asks for software ARGB_8888 ones (no banding). While the app is not visible the memory
@@ -45,9 +52,22 @@ object Img {
      * [original] routes the work to the originals queue and disk cache; [deep] decodes software
      * bitmaps in ARGB_8888 instead of RGB_565.
      */
-    data class Spec(val w: Int, val hw: Boolean = true, val alpha: Boolean = false, val original: Boolean = false, val deep: Boolean = false) {
-        fun key(url: String) = url + "|" + w + (if (hw) "h" else "s") + (if (alpha) "a" else "") + (if (deep) "d" else "")
+    data class Spec(val w: Int, val hw: Boolean = true, val alpha: Boolean = false, val original: Boolean = false, val deep: Boolean = false, val h: Int = 0) {
+        fun key(url: String) = url + "|" + w + (if (h > 0) "x$h" else "") + (if (hw) "h" else "s") + (if (alpha) "a" else "") + (if (deep) "d" else "")
     }
+
+    /**
+     * The spec for a CENTER_CROP image [wDp] × [hDp] that grows to [focusScale] when focused, in
+     * real pixels of [c]'s (scaled) density, so the focused card is still drawn 1:1 or sharper.
+     */
+    fun cover(c: Context, wDp: Int, hDp: Int, focusScale: Float = 1f): Spec {
+        val d = c.resources.displayMetrics.density * focusScale
+        return Spec(kotlin.math.ceil(wDp * d).toInt(), h = kotlin.math.ceil(hDp * d).toInt())
+    }
+
+    /** As [cover], for a box already in pixels. */
+    fun coverPx(wPx: Int, hPx: Int, focusScale: Float = 1f): Spec =
+        Spec(kotlin.math.ceil(wPx * focusScale).toInt(), h = kotlin.math.ceil(hPx * focusScale).toInt())
 
     private val main = Handler(Looper.getMainLooper())
     private lateinit var app: Context
@@ -87,6 +107,17 @@ object Img {
     private const val FULL_TARGET = 150L * 1024 * 1024
     private const val RETRY_MS = 15_000L
 
+    /**
+     * The preview cache's folder. 1.4.2 moved it (img → img2) so the low-res Steam thumbnails
+     * cached before the hub's sharp previews are dropped once; the old folder is deleted in the
+     * background at start.
+     */
+    private const val PREVIEW_DIR = "img2"
+    private val OLD_PREVIEW_DIRS = listOf("img")
+
+    /** A decode this much smaller than its spec (in both directions) is a too-small source. */
+    private const val SMALL = 0.75f
+
     fun init(c: Context) {
         if (::app.isInitialized) return
         app = c.applicationContext
@@ -97,12 +128,15 @@ object Img {
         mem = object : LruCache<String, Bitmap>(budget) {
             override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
         }
+        trimmer.execute {
+            for (name in OLD_PREVIEW_DIRS) try { File(app.cacheDir, name).deleteRecursively() } catch (_: Throwable) {}
+        }
     }
 
     /** Width of the UI surface in px (1920 on a Shield, whatever the TV panel is). */
     fun screenWidth(c: Context): Int = c.resources.displayMetrics.widthPixels
 
-    private fun dir(original: Boolean) = File(app.cacheDir, if (original) "img-full" else "img").apply { mkdirs() }
+    private fun dir(original: Boolean) = File(app.cacheDir, if (original) "img-full" else PREVIEW_DIR).apply { mkdirs() }
     private fun diskFile(url: String, original: Boolean) = File(dir(original), GamehubTv.sha1(GamehubTv.abs(app, url)))
 
     fun cached(url: String, spec: Spec): Bitmap? = if (::mem.isInitialized) mem.get(spec.key(url)) else null
@@ -153,6 +187,10 @@ object Img {
         }
     }
 
+    /** Smaller than [spec] asks for in both directions: the source itself is too small. */
+    internal fun tooSmall(bw: Int, bh: Int, spec: Spec): Boolean =
+        bw < spec.w * SMALL && (spec.h <= 0 || bh < spec.h * SMALL)
+
     private fun finish(key: String, bmp: Bitmap?) {
         val p = waiting.remove(key) ?: return // a twin finished first
         if (bmp != null) { mem.put(key, bmp); failedAt.remove(key) } else failedAt[key] = SystemClock.uptimeMillis()
@@ -163,8 +201,12 @@ object Img {
      * Binds [url] to [iv]. A cached bitmap appears immediately; otherwise the view is cleared and
      * the bitmap fades in when it arrives, unless the view was re-bound in the meantime. [onDone]
      * always gets the bitmap the view shows (also when it was already showing it), or null.
+     *
+     * [full]: the capture's original. When [url] decodes too small for [spec] (an old low-res
+     * preview), the original is decoded at the same size on the originals queue and swapped in,
+     * rather than the small one being stretched; next time the sharp copy is used straight away.
      */
-    fun into(iv: ImageView, url: String?, spec: Spec, fade: Boolean = true, urgent: Boolean = false, onDone: ((Bitmap?) -> Unit)? = null) {
+    fun into(iv: ImageView, url: String?, spec: Spec, fade: Boolean = true, urgent: Boolean = false, full: String? = null, onDone: ((Bitmap?) -> Unit)? = null) {
         if (url == null) {
             iv.setTag(R.id.img_key, null)
             iv.setImageDrawable(null)
@@ -177,12 +219,14 @@ object Img {
             return
         }
         iv.setTag(R.id.img_key, key)
-        val hit = mem.get(key)
+        val fullSpec = spec.copy(original = true)
+        val hit = (if (full != null && full != url) mem.get(fullSpec.key(full)) else null) ?: mem.get(key)
         if (hit != null) {
             iv.animate().cancel()
             iv.alpha = 1f
             iv.setImageBitmap(hit)
             onDone?.invoke(hit)
+            upgrade(iv, key, hit, spec, full, url)
             return
         }
         iv.setImageDrawable(null)
@@ -193,6 +237,15 @@ object Img {
                 if (fade) { iv.alpha = 0f; iv.animate().alpha(1f).setDuration(160L).start() }
             }
             onDone?.invoke(bmp)
+            if (bmp != null) upgrade(iv, key, bmp, spec, full, url)
+        }
+    }
+
+    /** [shown] is smaller than [spec] needs: decode [full] at that size and swap it in. */
+    private fun upgrade(iv: ImageView, key: String, shown: Bitmap, spec: Spec, full: String?, url: String) {
+        if (full == null || full == url || !tooSmall(shown.width, shown.height, spec)) return
+        load(full, spec.copy(original = true)) { b ->
+            if (b != null && b.width > shown.width && iv.getTag(R.id.img_key) == key) iv.setImageBitmap(b)
         }
     }
 
@@ -227,22 +280,34 @@ object Img {
         }
     }
 
+    /**
+     * The width to decode [w] × [h] at for [spec]: the spec's width, or for a cover spec the width
+     * at which the image covers the whole box (a wide image in a narrower box is sized by its
+     * height). Never wider than the source: a small source is never upscaled here.
+     */
+    internal fun targetWidth(w: Int, h: Int, spec: Spec): Int {
+        var t = spec.w
+        if (spec.h > 0 && h > 0) t = maxOf(t, kotlin.math.ceil(spec.h.toDouble() * w / h).toInt())
+        return t.coerceAtMost(w).coerceAtLeast(1)
+    }
+
     private fun decode(f: File, spec: Spec): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(f.path, bounds)
         val w = bounds.outWidth
         if (w <= 0 || bounds.outHeight <= 0) return null
+        val target = targetWidth(w, bounds.outHeight, spec)
         var sample = 1
-        while (w / (sample * 2) >= spec.w) sample *= 2
+        while (w / (sample * 2) >= target) sample *= 2
         val sampled = w / sample
         fun opts(config: Bitmap.Config) = BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = config
-            if (sampled > spec.w * 1.05f) {
+            if (sampled > target * 1.05f) {
                 // Never hold more pixels than the view shows.
                 inScaled = true
                 inDensity = sampled
-                inTargetDensity = spec.w
+                inTargetDensity = target
             }
         }
         val soft = if (spec.alpha || spec.deep) Bitmap.Config.ARGB_8888 else Bitmap.Config.RGB_565

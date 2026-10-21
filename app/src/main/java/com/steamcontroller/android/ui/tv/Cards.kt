@@ -118,7 +118,7 @@ class Tile(
     val hDp: Int,
     private val captionOnFocus: Boolean,
     private val circle: Boolean = false,
-    scale: Float = 1.05f,
+    scale: Float = FOCUS_SCALE,
 ) : LinearLayout(ctx) {
     val card = FrameLayout(ctx)
     val image = ImageView(ctx)
@@ -129,6 +129,11 @@ class Tile(
     val title: TextView = Kit.title(ctx, "", 14f)
     val meta: TextView = Kit.label(ctx, "", 10.5f, C.text3)
     private val ring = FocusRing(resources.displayMetrics.density, round = circle)
+
+    companion object {
+        /** How much a focused tile grows; images are decoded for that size ([Img.cover]). */
+        const val FOCUS_SCALE = 1.05f
+    }
 
     init {
         orientation = VERTICAL
@@ -215,7 +220,7 @@ class PicCard(ctx: Context) : FrameLayout(ctx) {
         foreground = FocusRing(resources.displayMetrics.density, 6f)
         isFocusable = true
         isClickable = true
-        FocusFx.attach(this, 1.05f)
+        FocusFx.attach(this, Tile.FOCUS_SCALE)
         image.scaleType = ImageView.ScaleType.CENTER_CROP
         image.setBackgroundColor(C.surface2)
         image.roundCorners(6f)
