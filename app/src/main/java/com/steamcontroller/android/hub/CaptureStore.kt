@@ -20,6 +20,11 @@ object CaptureStore {
     const val TMP_PREFIX = "tmp_"
     /** A finished screencap waiting for [CaptureLevels]; becomes `<id>.png` once processed. */
     const val RAW_SUFFIX = ".raw"
+    /** Present while [CaptureLevels] decodes `<id>.raw`; left behind only if the process died. */
+    const val TRY_SUFFIX = ".lvtry"
+
+    /** Held by every full-size capture decode, so two 4K bitmaps are never in memory at once. */
+    val decodeLock = Any()
     private const val PREVIEW_MAX_WIDTH = 1600
     private val IEND = byteArrayOf(0x49, 0x45, 0x4E, 0x44) // "IEND"
 
@@ -55,6 +60,26 @@ object CaptureStore {
             .put("tzOffsetMin", offsetMin)
         if (fgPackage != null) o.put("fgPackage", fgPackage)
         File(d, "$id.json").writeText(o.toString())
+    }
+
+    /**
+     * Adds the level-fix decision to `<id>.json` (sent as the upload's meta). Only when the meta
+     * file exists: [pending] rebuilds a missing one, and a file holding only this would hide that.
+     */
+    fun addLevels(queueDir: File, id: String, levels: JSONObject) {
+        val f = File(queueDir, "$id.json")
+        if (!f.isFile) return
+        try {
+            val o = JSONObject(f.readText()).put("levels", levels)
+            val tmp = File(queueDir, "$TMP_PREFIX$id.json")
+            tmp.writeText(o.toString())
+            if (!tmp.renameTo(f)) {
+                f.writeText(o.toString())
+                tmp.delete()
+            }
+        } catch (_: Exception) {
+            // Best effort: the capture uploads without the note.
+        }
     }
 
     data class Pending(val id: String, val png: File, val meta: JSONObject)
@@ -109,7 +134,9 @@ object CaptureStore {
      * Downscaled JPEG used by the hub for thumbnails and AI naming, plus the original's size.
      * Decodes with a power-of-two sample size first so a 4K PNG never sits in memory at full size.
      */
-    fun preview(png: File): Triple<ByteArray, Int, Int>? {
+    fun preview(png: File): Triple<ByteArray, Int, Int>? = synchronized(decodeLock) { previewLocked(png) }
+
+    private fun previewLocked(png: File): Triple<ByteArray, Int, Int>? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(png.path, bounds)
         val w = bounds.outWidth

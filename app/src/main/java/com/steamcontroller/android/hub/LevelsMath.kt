@@ -13,8 +13,14 @@ object LevelsMath {
     /** Grid step for sampling, in pixels along both axes (1/64 of the frame). */
     const val SAMPLE_STEP = 8
 
-    /** A capture whose 1st-percentile luminance is at least this is treated as limited range. */
+    /** A capture whose 1st-percentile luminance is at least this is treated as limited range... */
     const val LIMITED_P1_MIN = 12
+
+    /**
+     * ...provided its 99th percentile is at most this: limited video tops out at 235, so a frame
+     * with brighter highlights than that is full range already (a bright native app, say).
+     */
+    const val LIMITED_P99_MAX = 240
 
     private const val BLACK = 16
     private const val WHITE = 235
@@ -63,7 +69,7 @@ object LevelsMath {
     }
 
     data class Levels(val p1: Int, val p99: Int, val samples: Long) {
-        val limited: Boolean get() = samples > 0 && p1 >= LIMITED_P1_MIN
+        val limited: Boolean get() = samples > 0 && p1 >= LIMITED_P1_MIN && p99 <= LIMITED_P99_MAX
     }
 
     fun measure(hist: IntArray): Levels {
@@ -72,14 +78,20 @@ object LevelsMath {
         return Levels(percentile(hist, 0.01), percentile(hist, 0.99), total)
     }
 
-    /** Maps R, G and B of the first [count] pixels through [lut] in place; alpha is untouched. */
-    fun applyLut(px: IntArray, count: Int, lut: IntArray = EXPAND_LUT) {
+    /**
+     * Maps R, G and B of the first [count] pixels through [lut] in place; alpha is untouched.
+     * Returns the bitwise AND of their alpha values (0xFF: every pixel opaque).
+     */
+    fun applyLut(px: IntArray, count: Int, lut: IntArray = EXPAND_LUT): Int {
+        var alphaAnd = 0xFF
         for (i in 0 until count) {
             val c = px[i]
+            alphaAnd = alphaAnd and (c ushr 24)
             px[i] = (c and -0x1000000) or
                 (lut[(c shr 16) and 0xFF] shl 16) or
                 (lut[(c shr 8) and 0xFF] shl 8) or
                 lut[c and 0xFF]
         }
+        return alphaAnd
     }
 }

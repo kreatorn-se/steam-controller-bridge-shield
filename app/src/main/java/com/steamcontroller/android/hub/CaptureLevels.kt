@@ -6,6 +6,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import com.steamcontroller.android.service.Diagnostics
+import org.json.JSONObject
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -24,6 +25,11 @@ import java.util.concurrent.Executors
  * `<id>.png`, by rename, so the uploader and the preview JPEG only ever see the finished image.
  * Anything that goes wrong (decode failure, out of memory, a failed encode) publishes the file
  * exactly as screencap wrote it.
+ *
+ * A `<id>.lvtry` marker exists while a capture is being decoded. If the process dies with it in
+ * place (lmkd killing the app for the 33 MB bitmap is the likely cause), the orphan pass publishes
+ * that capture as captured instead of trying again, so one capture can never cause a kill loop.
+ * The decision travels with the upload as `levels: {p1, p99, expanded}` in `<id>.json`.
  */
 object CaptureLevels {
     private const val TAG = "CaptureLevels"
@@ -31,6 +37,8 @@ object CaptureLevels {
     private const val IO_BUFFER = 256 * 1024
     /** A `.raw` left this long without a job (the process died mid-way) is picked up again. */
     private const val ORPHAN_AGE_MS = 60_000L
+    /** GamehubSync skips PNGs younger than this; a published capture should not have to wait. */
+    private const val UPLOAD_SETTLE_MS = 2_000L
 
     sealed class Outcome {
         data class Expanded(val levels: LevelsMath.Levels) : Outcome()
@@ -53,11 +61,15 @@ object CaptureLevels {
      * after `<id>.png` is in place (true) or could not be published at all (false).
      */
     fun submit(queueDir: File, id: String, raw: File, pictures: File? = null, done: (Boolean) -> Unit) {
+        submitJob(id, done) { finish(queueDir, id, raw, pictures) }
+    }
+
+    private fun submitJob(id: String, done: (Boolean) -> Unit, job: () -> Boolean) {
         if (!inFlight.add(id)) return
         worker.execute {
             var ok = false
             try {
-                ok = finish(queueDir, id, raw, pictures)
+                ok = job()
             } catch (t: Throwable) {
                 Log.e(TAG, "levels job for $id threw: ${t.message}")
             } finally {
@@ -67,67 +79,134 @@ object CaptureLevels {
         }
     }
 
-    /** Re-queues `.raw` captures a killed process left behind (called from the sync loop). */
+    /**
+     * Captures a killed process left behind (called from the sync loop): a `.raw` with no attempt
+     * marker is processed again; one whose attempt was interrupted is published as captured.
+     */
     fun resumeOrphans(queueDir: File, done: (Boolean) -> Unit) {
         val now = System.currentTimeMillis()
-        queueDir.listFiles()?.forEach { f ->
-            if (!f.isFile || !f.name.endsWith(CaptureStore.RAW_SUFFIX)) return@forEach
-            val id = f.name.removeSuffix(CaptureStore.RAW_SUFFIX)
-            if (id in inFlight || now - f.lastModified() < ORPHAN_AGE_MS) return@forEach
-            Log.i(TAG, "resuming orphaned capture $id")
-            submit(queueDir, id, f, null, done)
+        val files = queueDir.listFiles() ?: return
+        val raws = files.filter { it.isFile && it.name.endsWith(CaptureStore.RAW_SUFFIX) }
+            .associateBy { it.name.removeSuffix(CaptureStore.RAW_SUFFIX) }
+        for (f in files) {
+            // A marker whose capture is gone (published, then the process died): just litter.
+            if (f.name.endsWith(CaptureStore.TRY_SUFFIX)) {
+                val id = f.name.removeSuffix(CaptureStore.TRY_SUFFIX)
+                if (id !in raws && id !in inFlight) f.delete()
+            }
+        }
+        for ((id, raw) in raws) {
+            if (id in inFlight || now - raw.lastModified() < ORPHAN_AGE_MS) continue
+            val marker = File(queueDir, "$id${CaptureStore.TRY_SUFFIX}")
+            if (marker.exists()) {
+                submitJob(id, done) {
+                    val line = "capture levels $id skipped after interrupted attempt -> left as captured"
+                    Log.w(TAG, line)
+                    Diagnostics.record(TAG, line)
+                    CaptureStore.addLevels(queueDir, id, JSONObject().put("expanded", false).put("error", "interrupted"))
+                    val ok = File(queueDir, "$id.png").isFile && raw.delete() || publish(raw, File(queueDir, "$id.png"), raw.lastModified())
+                    marker.delete()
+                    ok
+                }
+            } else {
+                Log.i(TAG, "resuming orphaned capture $id")
+                submit(queueDir, id, raw, null, done)
+            }
         }
     }
 
     private fun finish(queueDir: File, id: String, raw: File, pictures: File?): Boolean {
-        if (File(queueDir, "$id.png").isFile) {
+        val png = File(queueDir, "$id.png")
+        if (png.isFile) {
             // Published before a crash took the process; only the original is left to drop.
             raw.delete()
+            File(queueDir, "$id${CaptureStore.TRY_SUFFIX}").delete()
             return true
         }
         if (!raw.isFile) return false
+        val rawMtime = raw.lastModified()
+        val marker = File(queueDir, "$id${CaptureStore.TRY_SUFFIX}")
         val out = File(queueDir, "${CaptureStore.TMP_PREFIX}${id}_lv.png")
-        val started = SystemClock.elapsedRealtime()
-        val outcome = try {
-            expandInto(raw, out)
-        } catch (_: OutOfMemoryError) {
-            Outcome.Failed("out of memory")
-        } catch (t: Throwable) {
-            Outcome.Failed(t.javaClass.simpleName + (t.message?.let { ": $it" } ?: ""))
-        }
-        val secs = (SystemClock.elapsedRealtime() - started) / 1000.0
-        val line = when (outcome) {
-            is Outcome.Expanded -> "capture levels $id limited p1=${outcome.levels.p1} p99=${outcome.levels.p99}" +
-                " -> expanded 16-235 to 0-255 in ${fmt(secs)} s"
-            is Outcome.Unchanged -> "capture levels $id full p1=${outcome.levels.p1} p99=${outcome.levels.p99}" +
-                " -> unchanged (${fmt(secs)} s)"
-            is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> left as captured"
-        }
-        Log.i(TAG, line)
-        Diagnostics.record(TAG, line)
+        try {
+            try { marker.writeText(System.currentTimeMillis().toString()) } catch (t: Throwable) { Log.w(TAG, "no attempt marker for $id: ${t.message}") }
+            val started = SystemClock.elapsedRealtime()
+            val outcome = try {
+                expandInto(raw, out)
+            } catch (_: OutOfMemoryError) {
+                Outcome.Failed("out of memory")
+            } catch (t: Throwable) {
+                Outcome.Failed(t.javaClass.simpleName + (t.message?.let { ": $it" } ?: ""))
+            }
+            val secs = (SystemClock.elapsedRealtime() - started) / 1000.0
+            val line = when (outcome) {
+                is Outcome.Expanded -> "capture levels $id limited p1=${outcome.levels.p1} p99=${outcome.levels.p99}" +
+                    " -> expanded 16-235 to 0-255 in ${fmt(secs)} s"
+                is Outcome.Unchanged -> "capture levels $id full p1=${outcome.levels.p1} p99=${outcome.levels.p99}" +
+                    " -> unchanged (${fmt(secs)} s)"
+                is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> left as captured"
+            }
+            Log.i(TAG, line)
+            Diagnostics.record(TAG, line)
 
-        val png = File(queueDir, "$id.png")
-        val published = if (outcome is Outcome.Expanded) {
-            // Publish first, drop the original after: a crash in between leaves both, and the
-            // orphan pass then finds png present and only cleans up.
-            val moved = out.renameTo(png)
-            if (moved) raw.delete() else Log.w(TAG, "could not publish processed $id")
-            moved || publishRaw(raw, png)
-        } else {
-            out.delete()
-            publishRaw(raw, png)
+            // Into <id>.json before the PNG appears, so the upload carries it.
+            CaptureStore.addLevels(queueDir, id, when (outcome) {
+                is Outcome.Expanded -> JSONObject().put("p1", outcome.levels.p1).put("p99", outcome.levels.p99).put("expanded", true)
+                is Outcome.Unchanged -> JSONObject().put("p1", outcome.levels.p1).put("p99", outcome.levels.p99).put("expanded", false)
+                is Outcome.Failed -> JSONObject().put("expanded", false).put("error", outcome.reason.take(120))
+            })
+
+            val published = if (outcome is Outcome.Expanded) {
+                // Publish first, drop the original after: a crash in between leaves both, and the
+                // orphan pass then finds png present and only cleans up.
+                val moved = out.renameTo(png)
+                if (moved) {
+                    settle(png, rawMtime)
+                    raw.delete()
+                } else {
+                    Log.w(TAG, "could not publish processed $id")
+                    out.delete()
+                }
+                moved || publish(raw, png, rawMtime)
+            } else {
+                out.delete()
+                publish(raw, png, rawMtime)
+            }
+            if (published && pictures != null && outcome is Outcome.Expanded) writeBackPictures(png, pictures)
+            return published
+        } finally {
+            marker.delete()
         }
-        if (published && pictures != null && outcome is Outcome.Expanded) writeBackPictures(png, pictures)
-        return published
     }
 
-    private fun publishRaw(raw: File, png: File): Boolean {
-        if (raw.renameTo(png)) return true
+    /**
+     * The uploader skips PNGs younger than 2 s (screencap may still be writing). This one is
+     * complete: give it the capture's own time, or, where the file system will not take that,
+     * wait out the rest of those 2 s so the kick that follows is not wasted.
+     */
+    private fun settle(png: File, mtime: Long) {
+        val age = System.currentTimeMillis() - png.lastModified()
+        if (age >= UPLOAD_SETTLE_MS) return
+        if (mtime > 0 && png.setLastModified(mtime) && System.currentTimeMillis() - png.lastModified() >= UPLOAD_SETTLE_MS) return
+        val wait = UPLOAD_SETTLE_MS + 100 - (System.currentTimeMillis() - png.lastModified())
+        if (wait > 0) try { Thread.sleep(wait.coerceAtMost(UPLOAD_SETTLE_MS + 100)) } catch (_: InterruptedException) { }
+    }
+
+    /** Publishes the file as screencap wrote it: rename, or copy via a temp name and rename. */
+    private fun publish(raw: File, png: File, rawMtime: Long): Boolean {
+        if (raw.renameTo(png)) {
+            settle(png, rawMtime)
+            return true
+        }
+        val tmp = File(png.parentFile, "${CaptureStore.TMP_PREFIX}${png.name}")
         return try {
-            raw.copyTo(png, overwrite = true)
+            raw.copyTo(tmp, overwrite = true)
+            if (!tmp.renameTo(png)) throw IOException("rename failed")
+            settle(png, rawMtime)
             raw.delete()
             true
         } catch (t: Throwable) {
+            // Never leave a truncated PNG where the uploader (or the orphan pass) would trust it.
+            tmp.delete()
             Log.w(TAG, "could not publish ${raw.name}: ${t.message}")
             false
         }
@@ -150,8 +229,16 @@ object CaptureLevels {
         Diagnostics.record(TAG, note)
     }
 
-    /** Decodes once, measures, and if limited writes the expanded PNG to [out] (atomically complete). */
+    /**
+     * Decodes once, measures, and if limited writes the expanded PNG to [out] (complete before
+     * this returns). Holds [CaptureStore.decodeLock] throughout, so the uploader's preview decode
+     * never runs alongside it.
+     */
     private fun expandInto(src: File, out: File): Outcome {
+        return synchronized(CaptureStore.decodeLock) { expandLocked(src, out) }
+    }
+
+    private fun expandLocked(src: File, out: File): Outcome {
         val opts = BitmapFactory.Options().apply {
             inMutable = true
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -175,14 +262,17 @@ object CaptureLevels {
             if (!levels.limited) return Outcome.Unchanged(levels)
 
             val lut = LevelsMath.EXPAND_LUT
+            var alphaAnd = 0xFF
             var y0 = 0
             while (y0 < h) {
                 val rows = minOf(BAND_ROWS, h - y0)
                 bmp.getPixels(buf, 0, w, 0, y0, w, rows)
-                LevelsMath.applyLut(buf, w * rows, lut)
+                alphaAnd = alphaAnd and LevelsMath.applyLut(buf, w * rows, lut)
                 bmp.setPixels(buf, 0, w, 0, y0, w, rows)
                 y0 += rows
             }
+            // screencap frames are opaque: an RGB PNG is a quarter smaller and quicker to encode.
+            if (alphaAnd == 0xFF) bmp.setHasAlpha(false)
 
             out.delete()
             FileOutputStream(out).use { fos ->

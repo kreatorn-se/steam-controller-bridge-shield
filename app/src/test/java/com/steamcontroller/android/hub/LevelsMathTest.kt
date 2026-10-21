@@ -52,11 +52,19 @@ class LevelsMathTest {
     @Test
     fun applyLutMapsChannelsAndKeepsAlpha() {
         val px = intArrayOf(argb(0xFF, 16, 128, 235), argb(0x80, 235, 16, 128), argb(0x00, 0, 255, 17), 0x7)
-        LevelsMath.applyLut(px, 3)
+        assertEquals("alpha AND of the first three", 0x00, LevelsMath.applyLut(px, 3))
         assertEquals(argb(0xFF, 0, 130, 255), px[0])
         assertEquals(argb(0x80, 255, 0, 130), px[1])
         assertEquals(argb(0x00, 0, 255, 1), px[2])
         assertEquals("beyond count untouched", 0x7, px[3])
+    }
+
+    @Test
+    fun applyLutReportsOpaque() {
+        val px = IntArray(4) { grey(100) }
+        assertEquals(0xFF, LevelsMath.applyLut(px, px.size))
+        px[2] = argb(0xFE, 1, 2, 3)
+        assertEquals(0xFE, LevelsMath.applyLut(px, px.size))
     }
 
     // ------------------------------------------------------------------ luma / percentiles
@@ -108,11 +116,36 @@ class LevelsMathTest {
     fun limitedRangeWithFullRangePillIsStillDetected() {
         // The CAPTURED pill: a few true-black and true-white pixels (well under 1 %).
         val rows = limitedFrame().toMutableList()
-        rows += IntArray(256) { x -> grey(if (x < 60) 0 else 255) }
+        // A dark glass pill with white text: true 0 and 255 pixels, each well under 1 %.
+        rows += IntArray(256) { x -> grey(if (x < 60) 0 else if (x < 120) 255 else 30) }
         val hist = histOf(rows)
         assertEquals(0, hist.indexOfFirst { it > 0 }) // min is 0 ...
+        assertEquals(255, hist.indexOfLast { it > 0 }) // ... max is 255 ...
         val lv = LevelsMath.measure(hist)
-        assertTrue("... but p1=${lv.p1}", lv.limited)
+        assertTrue("... but p1=${lv.p1} p99=${lv.p99}", lv.limited)
+        assertTrue(lv.p99 <= LevelsMath.LIMITED_P99_MAX)
+    }
+
+    @Test
+    fun brightFullRangeFrameWithoutBlacksIsLeftAlone() {
+        // A bright native screen (snow, a light UI): no true blacks, so p1 >= 12, but highlights
+        // well above video white.
+        val rows = List(64) { y -> IntArray(256) { x -> grey(60 + ((x * 3 + y * 7) % 196)) } }
+        val lv = LevelsMath.measure(histOf(rows))
+        assertTrue("p1=${lv.p1}", lv.p1 >= LevelsMath.LIMITED_P1_MIN)
+        assertTrue("p99=${lv.p99}", lv.p99 > LevelsMath.LIMITED_P99_MAX)
+        assertFalse(lv.limited)
+    }
+
+    @Test
+    fun p99BoundaryIsInclusiveAt240() {
+        val h = IntArray(256)
+        h[20] = 4_900; h[240] = 100
+        assertEquals(240, LevelsMath.measure(h).p99)
+        assertTrue(LevelsMath.measure(h).limited)
+        h[240] = 0; h[241] = 100
+        assertEquals(241, LevelsMath.measure(h).p99)
+        assertFalse(LevelsMath.measure(h).limited)
     }
 
     @Test
