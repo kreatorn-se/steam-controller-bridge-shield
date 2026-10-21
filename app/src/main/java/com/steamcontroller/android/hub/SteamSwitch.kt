@@ -7,6 +7,7 @@ import com.steamcontroller.android.R
 import com.steamcontroller.android.input.NamedProfile
 import com.steamcontroller.android.service.ControllerService
 import com.steamcontroller.android.ui.pill.Pill
+import com.steamcontroller.android.ui.tv.ImportStatus
 
 /**
  * Profiles that follow Steam (replaces "bind to app", which cannot work inside GeForce NOW):
@@ -29,16 +30,26 @@ object SteamSwitch {
 
     private fun p(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** One poll (background thread). Returns how long to wait before the next one, in ms. */
+    /**
+     * One poll (background thread). Returns how long to wait before the next one, in ms. The only
+     * `/now` poll in the app: it also feeds the status strip's import chip ([ImportStatus]), so it
+     * runs while the bridge runs (profiles) or while the app is in front (the chip).
+     */
     fun tick(c: Context): Long {
-        if (!ControllerService.isRunning || !GamehubStore.isLinked(c) || GamehubTv.Missing.has(c, "now")) return 30_000L
-        val r = GamehubTv.now(c)
+        val profiles = ControllerService.isRunning
+        if (!profiles && !ImportStatus.active) return 30_000L
+        if (!GamehubStore.isLinked(c)) { ImportStatus.post(null); return 30_000L }
+        if (GamehubTv.Missing.has(c, "now")) return 30_000L
+        val r = GamehubTv.nowStatus(c)
         if (r is GamehubTv.Res.Err) {
             if (r.fail == GamehubTv.Fail.NOT_DEPLOYED) GamehubTv.Missing.mark(c, "now")
+            if (r.fail == GamehubTv.Fail.NOT_LINKED || r.fail == GamehubTv.Fail.UNAUTHORIZED) ImportStatus.post(null)
             return 30_000L
         }
-        val now = (r as GamehubTv.Res.Ok).value
-        apply(c, now?.appid ?: 0L)
+        val st = (r as GamehubTv.Res.Ok).value
+        ImportStatus.post(st.importing)
+        if (!profiles) return 30_000L
+        apply(c, st.now?.appid ?: 0L)
         return if (gfnInFront(c)) 10_000L else 30_000L
     }
 

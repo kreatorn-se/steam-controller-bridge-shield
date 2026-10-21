@@ -279,7 +279,7 @@ class MainActivity : AppCompatActivity(), Host {
         pages[current]?.let { it.refresh(); it.onShow() }
         statusSeen = -1
         HomeRepo.start(this)
-        ImportStatus.start(this)
+        ImportStatus.start()
         lastInput = android.os.SystemClock.uptimeMillis()
         idleHandler.removeCallbacks(idleCheck)
         idleHandler.postDelayed(idleCheck, 20_000L)
@@ -602,11 +602,24 @@ class MainActivity : AppCompatActivity(), Host {
         }
     }
 
+    /** Whether the current page was last told it is covered ([Page.onCovered]). */
+    private var coveredSent = false
+
+    /** Tells the current page when show mode, a sheet or a game hub starts or stops covering it. */
+    private fun notifyCovered() {
+        val c = show != null || sheet != null || gameHub != null
+        if (c == coveredSent) return
+        coveredSent = c
+        pages[cur]?.onCovered(c)
+    }
+
     override fun go(id: PageId, focusContent: Boolean) {
         gameHub?.close()
         val switching = id != current || pageFrame.childCount == 0
         if (switching) {
             pages[current]?.let { old -> if (pageFrame.childCount > 0) { if (resumed) old.onHide(); pageFrame.removeView(old.view) } }
+            pages[current]?.let { if (coveredSent) it.onCovered(false) }
+            coveredSent = false
             cur = id
             val p = page(id)
             (p.view.parent as? ViewGroup)?.removeView(p.view)
@@ -619,6 +632,7 @@ class MainActivity : AppCompatActivity(), Host {
             renderImporting(ImportStatus.progress)
             p.refresh()
             if (resumed) p.onShow()
+            notifyCovered()
         }
         if (focusContent) pageFrame.post { focusPage() }
     }
@@ -646,10 +660,12 @@ class MainActivity : AppCompatActivity(), Host {
         pageFrame.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
         title.text = ""
         h.start()
+        notifyCovered()
     }
 
     private fun onHubClosed() {
         gameHub = null
+        notifyCovered()
         if (sheet == null && show == null) pageFrame.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         title.text = if (cur == PageId.HOME) "" else cur.title
         val b = focusBeforeHub
@@ -673,6 +689,7 @@ class MainActivity : AppCompatActivity(), Host {
         setContentFocusBlocked(true)
         sheet.setOnScrimClick { closeSheet() }
         sheet.animateIn()
+        notifyCovered()
     }
 
     override fun closeSheet() = closeSheet(immediate = false)
@@ -680,6 +697,7 @@ class MainActivity : AppCompatActivity(), Host {
     private fun closeSheet(immediate: Boolean) {
         val s = sheet ?: return
         sheet = null
+        notifyCovered()
         setContentFocusBlocked(false)
         if (immediate) overlay.removeView(s.root) else s.animateOut { overlay.removeView(s.root) }
         // Back to where the sheet was opened from (a page may move it on in onClosed).
@@ -712,10 +730,12 @@ class MainActivity : AppCompatActivity(), Host {
         showLayer.addView(s.root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentFocusBlocked(true)
         s.start()
+        notifyCovered()
     }
 
     private fun onShowClosed() {
         show = null
+        notifyCovered()
         setContentFocusBlocked(false)
         val back = focusBeforeShow
         focusBeforeShow = null

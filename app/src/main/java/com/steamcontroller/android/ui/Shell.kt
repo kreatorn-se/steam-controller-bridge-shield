@@ -76,6 +76,8 @@ abstract class Page(val host: Host) {
     open fun onShow() {}
     /** The page is leaving, or the activity paused. */
     open fun onHide() {}
+    /** Show mode (the screensaver too), a side sheet or a game hub now covers the page, or no longer does. */
+    open fun onCovered(covered: Boolean) {}
     open fun onFrame(f: LiveFrame) {}
     /** Consume Back (close an inner state); false lets the shell handle it. */
     open fun onBack(): Boolean = false

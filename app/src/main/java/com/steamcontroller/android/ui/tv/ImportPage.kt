@@ -15,7 +15,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.steamcontroller.android.R
-import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.hub.GamehubTv
 import com.steamcontroller.android.hub.GamehubTv.ImportGame
 import com.steamcontroller.android.hub.GamehubTv.ImportProgress
@@ -33,19 +32,20 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.concurrent.Executors
 
 /**
  * Whether the hub is importing screenshots right now (`/now`'s `importing`), for the status
- * strip's "Importing 120/857" chip: polled every 30 s while the app is in front, and updated at
- * once by the Import page's batches. Main-thread API.
+ * strip's "Importing 120/857" chip. Fed by the one `/now` poll there is ([hub.SteamSwitch], every
+ * 30 s while the app is in front or the bridge runs) and at once by the Import page's batches.
+ * Main-thread API, except [post].
  */
 object ImportStatus {
     private val main = Handler(Looper.getMainLooper())
-    private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "import-status").apply { isDaemon = true } }
     private val listeners = LinkedHashSet<(ImportProgress?) -> Unit>()
-    private var app: Context? = null
-    private var polling = false
+
+    /** The app is in front (MainActivity resumed): the /now poll runs for the chip too. */
+    @Volatile var active = false
+        private set
 
     /** The running import, or null when nothing is importing. */
     var progress: ImportProgress? = null
@@ -62,42 +62,13 @@ object ImportStatus {
         for (l in listeners.toList()) l(v)
     }
 
-    private val tick = object : Runnable {
-        override fun run() {
-            val c = app ?: return
-            poll(c)
-            main.postDelayed(this, PERIOD)
-        }
-    }
-
-    private fun poll(c: Context) {
-        if (polling || !GamehubStore.isLinked(c)) return
-        polling = true
-        io.execute {
-            val r = GamehubTv.nowStatus(c)
-            main.post {
-                polling = false
-                when (r) {
-                    is GamehubTv.Res.Ok -> report(r.value.importing)
-                    is GamehubTv.Res.Err -> if (r.fail == GamehubTv.Fail.NOT_LINKED || r.fail == GamehubTv.Fail.UNAUTHORIZED) report(null)
-                }
-            }
-        }
-    }
+    /** [report] from any thread (the /now poll). */
+    fun post(p: ImportProgress?) { main.post { report(p) } }
 
     /** While the activity is resumed. */
-    fun start(c: Context) {
-        app = c.applicationContext
-        main.removeCallbacks(tick)
-        main.post(tick)
-    }
+    fun start() { active = true }
 
-    fun stop() {
-        app = null
-        main.removeCallbacks(tick)
-    }
-
-    private const val PERIOD = 30_000L
+    fun stop() { active = false }
 }
 
 /**
@@ -186,27 +157,62 @@ class ImportPage(host: Host) : Page(host) {
 
     // ── lifecycle ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * Shown, and not covered by show mode (the screensaver included), a sheet or a game hub.
+     * Nothing here talks to the hub otherwise: every /import read costs the hub a scan of its
+     * inventory, and batches must never run under the screensaver.
+     */
+    private val active: Boolean get() = shown && !covered
+    private var covered = false
+
     override fun onShow() {
         shown = true
-        read(force = true)
-        reader?.cancel()
-        reader = host.activity.lifecycleScope.launch {
-            // The whole inventory at most every 30 s; the batch answers carry the progress between.
-            while (shown) {
-                delay(READ_EVERY_MS)
-                if (shown) read(force = false)
-            }
-        }
+        if (!covered) resume()
     }
 
     override fun onHide() {
         shown = false
+        pause()
+    }
+
+    override fun onCovered(covered: Boolean) {
+        if (covered == this.covered) return
+        this.covered = covered
+        if (covered) pause() else if (shown) resume()
+    }
+
+    private fun resume() {
+        read(force = true)
+        reader?.cancel()
+        reader = host.activity.lifecycleScope.launch {
+            // While a scan or an import runs, the whole inventory at most every 30 s (the batch
+            // answers carry the progress between); when nothing runs, only on open and on actions.
+            while (active) {
+                delay(READ_EVERY_MS)
+                if (active && (progress.running || state?.scan?.running == true)) read(force = false)
+            }
+        }
+    }
+
+    private fun pause() {
         reader?.cancel(); reader = null
         driver?.cancel(); driver = null
         scanner?.cancel(); scanner = null
+        pendingRead?.cancel(); pendingRead = null
     }
 
-    override fun refresh() { if (shown) read(force = false) }
+    private var pendingRead: Job? = null
+
+    /** One re-read a few seconds after the last action (switches pressed in a row read once). */
+    private fun readSoon() {
+        pendingRead?.cancel()
+        pendingRead = host.activity.lifecycleScope.launch {
+            delay(READ_AFTER_ACTION_MS)
+            if (active) read(force = true)
+        }
+    }
+
+    override fun refresh() { if (active) read(force = false) }
 
     override fun releaseImages() {
         for (k in 0 until list.childCount) (list.getChildAt(k) as? ImportRow)?.let { Img.release(it.cover) }
@@ -220,7 +226,7 @@ class ImportPage(host: Host) : Page(host) {
     private var reading = false
 
     private fun read(force: Boolean) {
-        if (reading) return
+        if (reading || !active) return
         val now = android.os.SystemClock.uptimeMillis()
         if (!force && now - readAt < READ_EVERY_MS - 1000L) return
         reading = true
@@ -330,11 +336,17 @@ class ImportPage(host: Host) : Page(host) {
 
     /** One batch at a time while something is left and the page is open. */
     private fun drive() {
-        if (!shown || driver?.isActive == true || !progress.running || state?.enabled == false) return
+        if (!active || driver?.isActive == true || !progress.running || state?.enabled == false) return
         driver = host.activity.lifecycleScope.launch {
-            while (shown && progress.running) {
-                val r = withContext(Dispatchers.IO) { GamehubTv.importBatch(ctx) }
-                if (!shown) break
+            while (active && progress.running) {
+                // One batch at a time across hide/show too: a blocking call that outlived a
+                // cancelled loop still counts as in flight until it returns.
+                val r = withContext(Dispatchers.IO) {
+                    if (!batchInFlight.compareAndSet(false, true)) null
+                    else try { GamehubTv.importBatch(ctx) } finally { batchInFlight.set(false) }
+                }
+                if (!active) break
+                if (r == null) { delay(IN_FLIGHT_WAIT_MS); continue }
                 val wait: Long = when (r) {
                     is GamehubTv.Res.Ok -> {
                         val b = r.value
@@ -376,12 +388,12 @@ class ImportPage(host: Host) : Page(host) {
 
     /** Keeps the inventory scan reading, one call at a time, while it runs and the page is open. */
     private fun keepScanning() {
-        if (!shown || scanner?.isActive == true) return
+        if (!active || scanner?.isActive == true) return
         scanner = host.activity.lifecycleScope.launch {
             var running = true
-            while (shown && running) {
+            while (active && running) {
                 val r = withContext(Dispatchers.IO) { GamehubTv.importScan(ctx) }
-                if (!shown) break
+                if (!active) break
                 when (r) {
                     is GamehubTv.Res.Ok -> {
                         running = r.value?.running ?: false
@@ -396,7 +408,7 @@ class ImportPage(host: Host) : Page(host) {
                 }
             }
             // The inventory changed: games and counts are new.
-            if (shown) read(force = true)
+            if (active) read(force = true)
         }
     }
 
@@ -415,8 +427,8 @@ class ImportPage(host: Host) : Page(host) {
                     setProgress(r.value)
                     Pill.show(ctx, Pill.Kind.SAVED, ctx.getString(if (on) R.string.imp_switch_on else R.string.imp_switch_off, g.name))
                     drive()
-                    // The counts (queued) come with the next re-read.
-                    read(force = true)
+                    // The counts (queued) come with a re-read shortly (one for several switches).
+                    readSoon()
                 }
                 is GamehubTv.Res.Err -> {
                     games = games.map { if (it.appid == g.appid) it.copy(importing = !on) else it }
@@ -441,7 +453,7 @@ class ImportPage(host: Host) : Page(host) {
                 }
                 is GamehubTv.Res.Err -> Pill.show(ctx, Pill.Kind.FAILED, ctx.getString(if (r.fail == GamehubTv.Fail.NOT_DEPLOYED) R.string.hold_needs_update else R.string.hold_failed))
             }
-            read(force = true)
+            readSoon()
         }
     }
 
@@ -479,6 +491,11 @@ class ImportPage(host: Host) : Page(host) {
         const val WAIT_STOPPED_MS = 60_000L
         const val WAIT_ERROR_MS = 30_000L
         const val SCAN_GAP_MS = 1_500L
+        const val READ_AFTER_ACTION_MS = 4_000L
+        const val IN_FLIGHT_WAIT_MS = 2_000L
+
+        /** A batch call is running (process-wide): never two at once. */
+        val batchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     }
 }
 
