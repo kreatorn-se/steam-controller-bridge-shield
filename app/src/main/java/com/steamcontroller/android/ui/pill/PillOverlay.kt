@@ -178,6 +178,17 @@ internal class PillOverlay(private val app: Context) {
             }
     }
 
+    /** Off the screen now, no exit animation (before a screencap). */
+    fun hideNow() {
+        enterAnim?.cancel()
+        bounceAnim?.cancel()
+        exitAnim?.let {
+            exitAnim = null
+            it.cancel()
+        }
+        detach()
+    }
+
     /** Quick shrink away, ease-in. */
     private fun exit() {
         val v = view ?: return

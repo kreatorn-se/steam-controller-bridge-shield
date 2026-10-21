@@ -594,12 +594,14 @@ class HomePage(host: Host) : Page(host) {
         v.count.text = rowMeta(r)
         head.addView(v.count, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(12) })
         rowLogo(v)
-        v.addView(head, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = left + ctx.dp(3) })
+        // Row titles and the first image start on [left], like the hero text and the game hub.
+        v.addView(head, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = left })
 
         val list = TvRecycler(ctx, TvRecycler.LOCK_RIGHT)
         v.list = list
-        list.setPadding(left, 0, safeH, 0)
-        list.layoutManager = KeylineLinear(ctx, LinearLayoutManagerH, keyline = { left }).apply { initialPrefetchItemCount = 6 }
+        // Tiles carry 3dp of focus-ring padding: offset by it so the images sit on the insets.
+        list.setPadding(left - ctx.dp(3), 0, safeH - ctx.dp(3), 0)
+        list.layoutManager = KeylineLinear(ctx, LinearLayoutManagerH, keyline = { left - ctx.dp(3) }).apply { initialPrefetchItemCount = 6 }
         list.setItemViewCacheSize(4)
         val kind = v.kind
         val wDp = kind.w

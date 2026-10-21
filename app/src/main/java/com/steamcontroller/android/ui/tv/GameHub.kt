@@ -42,9 +42,14 @@ object GameArt {
 /**
  * A hub for every game: the header (official hero art, or a capture chosen as background, with the
  * official logo), a stats strip (Steam playtime, sessions, captures, achievements with the rarest
- * and latest unlocks), filters (All, Favourites, Keywords, Session, Year, Source), then every capture as a
- * dense justified grid in day sections, newest first. Focus enters on the latest capture; any
+ * and latest unlocks), filters (All, Favourites, Keywords, Session, Year, Source), then every capture in a
+ * grid of 16:9 cards in day sections, newest first. Focus enters on the latest capture; any
  * capture opens show mode; a long press opens the hold menu.
+ *
+ * The grid shares the header's insets: it starts where the header content starts (right of the
+ * rail, [left]) and ends where the status strip's chips end (the right safe margin). Column count
+ * and card size come from the list's measured width ([GridMetrics]), never from display metrics,
+ * so the grid fills exactly that span at any UI scale.
  */
 class GameHub(private val host: Host, val game: String, private val onClose: () -> Unit) {
     private val ctx: Context = host.activity
@@ -53,11 +58,12 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private val screenH = res.displayMetrics.heightPixels
     private val safeH = res.getDimensionPixelSize(R.dimen.safe_h)
     private val safeV = res.getDimensionPixelSize(R.dimen.safe_v)
+    /** Where the header content, the day labels and the first column's image start. */
     private val left = safeH + ctx.dp(64 + 8)
-    private val contentW = screenW - left - safeH
-    private val rowH = ctx.dp(112)
     private val bgSpec = Img.coverPx(screenW, (screenH * 0.62f).toInt())
-    private val gap = ctx.dp(8)
+    /** Between cards (each card has 3dp of focus-ring padding around its image), as in Library. */
+    private val gap = ctx.dp(GridMetrics.GAP_DP)
+    private var grid = GridMetrics.of(ctx, screenW, left, safeH)
 
     val root = FrameLayout(ctx)
     private val bg = ImageView(ctx)
@@ -89,7 +95,7 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private sealed class Item {
         object Header : Item()
         data class Section(val title: String) : Item()
-        data class Row(val shots: List<Shot>, val widths: List<Int>, val height: Int, val start: Int) : Item()
+        data class Row(val shots: List<Shot>, val cols: Int, val start: Int) : Item()
     }
 
     private var items: List<Item> = listOf(Item.Header)
@@ -113,6 +119,13 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
         list.setItemViewCacheSize(6)
         list.setPadding(0, 0, 0, safeV + ctx.dp(40))
         root.addView(list, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // The real width decides the columns; a different one (first layout, a config change) re-flows.
+        list.addOnLayoutChangeListener { v, l, _, r, _, ol, _, or_, _ ->
+            if (r - l != or_ - ol && r - l > 0) {
+                val g = GridMetrics.of(ctx, v.width, left, safeH)
+                if (g != grid) { grid = g; v.post { if (!closed) rebuild() } }
+            }
+        }
         val fade = View(ctx).apply { background = Scrim(intArrayOf(C.bg, C.alpha(C.bg, 0.9f), C.alpha(C.bg, 0f)), floatArrayOf(0f, 0.6f, 1f)); alpha = 0f }
         root.addView(fade, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, safeV + ctx.dp(48 + 20)))
         list.addOnScrollListener(object : RecyclerView.OnScrollListener() {
@@ -446,7 +459,7 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
 
     private fun localDay(s: Shot): String = if (s.capturedAt <= 0) "" else Fmt.date(s)
 
-    /** Day sections of justified rows: every row exactly [contentW] wide except a section's last. */
+    /** Day sections of rows of [GridMetrics.cols] cards; a section's last row may be short. */
     private fun rebuild() {
         val out = ArrayList<Item>()
         out.add(Item.Header)
@@ -456,7 +469,12 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
             var end = i
             while (end < shots.size && localDay(shots[end]) == day) end++
             out.add(Item.Section(day))
-            justify(i, end, out)
+            var k = i
+            while (k < end) {
+                val n = minOf(grid.cols, end - k)
+                out.add(Item.Row(shots.subList(k, k + n).toList(), grid.cols, k))
+                k += n
+            }
             i = end
         }
         val old = items
@@ -481,28 +499,6 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
         is Item.Row -> "r" + it.shots.first().id
     }
 
-    private fun aspect(s: Shot): Float = if (s.width > 0 && s.height > 0) (s.width.toFloat() / s.height).coerceIn(0.5f, 3.6f) else 16f / 9f
-
-    private fun justify(from: Int, to: Int, out: MutableList<Item>) {
-        var i = from
-        while (i < to) {
-            var sum = 0f
-            var j = i
-            while (j < to) {
-                sum += aspect(shots[j])
-                j++
-                if (sum * rowH + (j - i - 1) * gap >= contentW) break
-            }
-            val n = j - i
-            val full = sum * rowH + (n - 1) * gap >= contentW
-            val h = if (full) ((contentW - (n - 1) * gap) / sum).toInt() else rowH
-            val widths = (i until j).map { (aspect(shots[it]) * h).toInt() }.toMutableList()
-            if (full) widths[widths.size - 1] += contentW - (n - 1) * gap - widths.sum() // absorb rounding
-            out.add(Item.Row(shots.subList(i, j).toList(), widths, h, i))
-            i = j
-        }
-    }
-
     private fun playFrom(shot: Shot?) {
         if (shots.isEmpty()) return
         val plain = filterMap().isEmpty() && kw.isEmpty()
@@ -523,13 +519,18 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = when (viewType) {
             0 -> H((header.parent as? ViewGroup)?.let { it.removeView(header); header } ?: header)
             1 -> H(Kit.label(ctx, "", 11.5f, C.text2).apply {
-                setPadding(left + ctx.dp(3), ctx.dp(22), 0, ctx.dp(10))
+                // Same start as the header's stats and the first card's image.
+                setPadding(left, ctx.dp(22), safeH, ctx.dp(10))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             })
             else -> H(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
+                // A focused card grows 5 % and glows past its cell, into this row's padding and
+                // past its bounds: neither may clip it.
                 clipChildren = false
-                setPadding(left - ctx.dp(3), 0, 0, gap - ctx.dp(6))
+                clipToPadding = false
+                // The card's 3dp ring padding sits left of [left], so the image starts on it.
+                setPadding(left - ctx.dp(3), 0, 0, gap)
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             })
         }
@@ -547,12 +548,12 @@ class GameHub(private val host: Host, val game: String, private val onClose: () 
     private fun bindRow(row: LinearLayout, r: Item.Row) {
         while (row.childCount > r.shots.size) row.removeViewAt(row.childCount - 1)
         while (row.childCount < r.shots.size) row.addView(PicCard(ctx))
+        val g = grid
         for ((k, s) in r.shots.withIndex()) {
             val card = row.getChildAt(k) as PicCard
-            val w = r.widths[k]
-            card.layoutParams = LinearLayout.LayoutParams(w + ctx.dp(6), r.height + ctx.dp(6)).apply { marginEnd = if (k < r.shots.size - 1) gap - ctx.dp(6) else 0 }
-            // Real pixels of the justified cell, at its focused size.
-            Img.into(card.image, s.previewUrl, Img.coverPx(w.coerceAtLeast(ctx.px(80)), r.height, Tile.FOCUS_SCALE), full = s.fullUrl)
+            card.layoutParams = LinearLayout.LayoutParams(g.cardW, g.cardH).apply { marginEnd = if (k < r.shots.size - 1) gap else 0 }
+            // Real pixels of the cell's image, at its focused size.
+            Img.into(card.image, s.previewUrl, Img.coverPx(g.imageW, g.imageH, Tile.FOCUS_SCALE), full = s.fullUrl)
             card.setFavorite(s.favorite)
             card.setOnClickListener { playFrom(s) }
             card.holdItem(HoldItem(s, CollRef("game:$game", game), shots))
@@ -587,5 +588,37 @@ class Bar(ctx: Context) : View(ctx) {
         c.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), r, r, p)
         p.color = C.accent
         c.drawRoundRect(0f, 0f, width * value, height.toFloat(), r, r, p)
+    }
+}
+
+/**
+ * Column count and card size for a capture grid spanning from [left] to `width − [right]`
+ * (image edges). Cards are 16:9 images inside a 3dp focus-ring padding, [GAP_DP] apart (Library's
+ * spacing); at least [MIN_COLS] columns, more while each image stays at least [MIN_IMAGE_DP] wide.
+ */
+data class GridMetrics(val cols: Int, val cardW: Int, val cardH: Int, val imageW: Int, val imageH: Int, val ring: Int) {
+    companion object {
+        const val GAP_DP = 14
+        const val MIN_COLS = 4
+        const val MIN_IMAGE_DP = 160
+        const val RING_DP = 3
+
+        fun of(ctx: Context, width: Int, left: Int, right: Int): GridMetrics =
+            compute(width, left, right, ctx.resources.displayMetrics.density)
+
+        /** Pure: [width], [left] and [right] in px; [density] px per dp. */
+        fun compute(width: Int, left: Int, right: Int, density: Float): GridMetrics {
+            fun dp(v: Int) = (v * density + 0.5f).toInt()
+            val ring = dp(RING_DP)
+            val gap = dp(GAP_DP)
+            // The span the cards themselves cover: their ring padding reaches 3dp past both image edges.
+            val span = (width - left - right + 2 * ring).coerceAtLeast(1)
+            val minCard = dp(MIN_IMAGE_DP) + 2 * ring
+            val cols = maxOf(MIN_COLS, (span + gap) / (minCard + gap))
+            val cardW = (span - (cols - 1) * gap) / cols
+            val imageW = (cardW - 2 * ring).coerceAtLeast(1)
+            val imageH = (imageW * 9 + 8) / 16
+            return GridMetrics(cols, cardW, imageH + 2 * ring, imageW, imageH, ring)
+        }
     }
 }

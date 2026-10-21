@@ -69,6 +69,8 @@ class LibraryPage(host: Host) : Page(host) {
     private var kwLoading = false
     private var kwToken = 0
     private val gap = ctx.dp(14)
+    /** The grid width the current layout was computed for (0: a fallback before layout). */
+    private var shownWidth = 0
 
     override val view: View = build()
     override val defaultFocus: View? get() = tabViews[tab]
@@ -108,14 +110,27 @@ class LibraryPage(host: Host) : Page(host) {
         val body = FrameLayout(ctx)
         body.clipChildren = false
         grid.setPadding(0, ctx.dp(14), 0, ctx.dp(40))
+        // [gap] between columns and none outside them: the first image starts on the content edge
+        // and the last one ends on the right safe margin (where the strip's chips end).
         grid.addItemDecoration(object : RecyclerView.ItemDecoration() {
             override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
-                outRect.right = gap
+                val span = (parent.layoutManager as? androidx.recyclerview.widget.GridLayoutManager)?.spanCount ?: 1
+                val pos = parent.getChildAdapterPosition(view)
+                val col = if (pos >= 0) pos % span else 0
+                outRect.left = col * gap / span
+                outRect.right = gap - (col + 1) * gap / span
                 outRect.bottom = gap
             }
         })
         gridMemory.clipChildren = false
-        gridMemory.addView(grid, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // Tiles carry 3dp of focus-ring padding around their image; the grid reaches 3dp past the
+        // content edges on both sides so the images themselves line up with them.
+        gridMemory.addView(grid, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+            leftMargin = -ctx.dp(3); rightMargin = -ctx.dp(3)
+        })
+        grid.addOnLayoutChangeListener { v, l, _, r, _, ol, _, or_, _ ->
+            if (r - l > 0 && r - l != or_ - ol && r - l != shownWidth) v.post { show(tab) }
+        }
         gridMemory.fallback = { grid.layoutManager?.let { lm -> (lm as KeylineGrid).findViewByPosition(lm.findFirstCompletelyVisibleItemPosition().coerceAtLeast(0)) } }
         body.addView(gridMemory, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         message.visibility = View.GONE
@@ -357,16 +372,23 @@ class LibraryPage(host: Host) : Page(host) {
 
     private fun show(t: Tab) {
         renderTabs()
-        val avail = grid.width.takeIf { it > 0 } ?: (ctx.resources.displayMetrics.widthPixels - 2 * ctx.resources.getDimensionPixelSize(R.dimen.safe_h) - ctx.dp(72))
+        val avail = grid.width.takeIf { it > 0 }
+            ?: (ctx.resources.displayMetrics.widthPixels - 2 * ctx.resources.getDimensionPixelSize(R.dimen.safe_h) - ctx.dp(72) + ctx.dp(6))
+        shownWidth = grid.width
         val cell = ctx.dp(t.w + 6) + gap
         val span = ((avail + gap) / cell).coerceAtLeast(1)
+        // Tiles grow (same aspect) to fill the row exactly instead of leaving a band on the right.
+        val density = ctx.resources.displayMetrics.density
+        val cardPx = (avail - (span - 1) * gap) / span
+        val tw = ((cardPx / density).toInt() - 6).coerceAtLeast(t.w)
+        val th = (tw * t.h + t.w / 2) / t.w
         val lm = KeylineGrid(ctx, span) { (grid.height * 0.26f).toInt() }
         grid.layoutManager = lm
         gridMemory.remembered = null
-        val spec = Img.cover(ctx, t.w, t.h, Tile.FOCUS_SCALE)
+        val spec = Img.cover(ctx, tw, th, Tile.FOCUS_SCALE)
         val empty: Boolean
         if (t == Tab.FAVOURITES) {
-            grid.adapter = SimpleAdapter(ArrayList(favs), { Tile(ctx, t.w, t.h, captionOnFocus = true) }) { v, shot, i ->
+            grid.adapter = SimpleAdapter(ArrayList(favs), { Tile(ctx, tw, th, captionOnFocus = true) }) { v, shot, i ->
                 val tile = v as Tile
                 Img.into(tile.image, shot.previewUrl, spec, full = shot.fullUrl)
                 tile.setCaption(shot.gameOrUnknown(), Fmt.dateShort(shot))
@@ -376,7 +398,7 @@ class LibraryPage(host: Host) : Page(host) {
             }
             empty = favs.isEmpty()
         } else if (t == Tab.KEYWORDS) {
-            grid.adapter = SimpleAdapter(ArrayList(kwShots), { Tile(ctx, t.w, t.h, captionOnFocus = true) }) { v, shot, i ->
+            grid.adapter = SimpleAdapter(ArrayList(kwShots), { Tile(ctx, tw, th, captionOnFocus = true) }) { v, shot, i ->
                 val tile = v as Tile
                 Img.into(tile.image, shot.previewUrl, spec, full = shot.fullUrl)
                 tile.setFavorite(shot.favorite)
@@ -389,7 +411,7 @@ class LibraryPage(host: Host) : Page(host) {
             if (kwViews.isEmpty() && kwList.isNotEmpty()) renderKeywordChips()
         } else {
             val items = lists[t] ?: emptyList()
-            grid.adapter = SimpleAdapter(items, { Tile(ctx, t.w, t.h, captionOnFocus = t == Tab.GAMES, circle = t.circle) }) { v, c, _ ->
+            grid.adapter = SimpleAdapter(items, { Tile(ctx, tw, th, captionOnFocus = t == Tab.GAMES, circle = t.circle) }) { v, c, _ ->
                 val tile = v as Tile
                 bind(tile, c, t, spec)
                 tile.card.setOnClickListener { val p = grid.getChildAdapterPosition(tile); if (p >= 0) play(t, p) }
