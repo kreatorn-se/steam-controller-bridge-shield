@@ -41,6 +41,8 @@ object GamehubTv {
         @Volatile var people: List<String>,
         /** Ids of [people], same order (people are tagged by id). */
         @Volatile var peopleIds: List<String> = emptyList(),
+        /** Keywords (round 5), sorted by name; empty on a hub without them. */
+        @Volatile var keywords: List<String> = emptyList(),
         val note: String?,
         val previewUrl: String,
         val fullUrl: String,
@@ -96,7 +98,17 @@ object GamehubTv {
         val years: List<Int>,
         val sources: List<String>,
         val sessionList: List<SessionInfo>,
+        /** Keywords on this game's kept captures, most used first (round 5; empty before). */
+        val keywords: List<KeywordCount> = emptyList(),
     )
+
+    data class KeywordCount(val name: String, val count: Int)
+
+    /** A keyword from GET /keywords: presets first, in the hub's order. */
+    data class Keyword(val name: String, val count: Int, val preset: Boolean)
+
+    /** Someone who can be tagged (GET /people?all=1). */
+    data class Person(val id: String, val name: String)
 
     data class Row(
         val id: String,
@@ -118,8 +130,11 @@ object GamehubTv {
 
     data class Saver(val collection: String, val intervalSec: Int, val shuffle: Boolean)
 
-    /** [GONE]: a write's target (shot, album, game) is not there any more; refresh and retry. */
-    enum class Fail { NOT_LINKED, NOT_DEPLOYED, UNAUTHORIZED, OFFLINE, SERVER, GONE }
+    /**
+     * [GONE]: a write's target (shot, album, game) is not there any more; refresh and retry.
+     * [BUSY]: 429, too many requests (the import's Steam budget, the diag cap): back off.
+     */
+    enum class Fail { NOT_LINKED, NOT_DEPLOYED, UNAUTHORIZED, OFFLINE, SERVER, GONE, BUSY }
 
     sealed class Res<out T> {
         data class Ok<T>(val value: T) : Res<T>()
@@ -129,7 +144,7 @@ object GamehubTv {
     }
 
     /** Collections the API knows by a fixed name. */
-    private val FIXED = setOf("recent", "favourites", "favorites", "patina", "inbox")
+    private val FIXED = setOf("recent", "favourites", "favorites", "patina")
 
     // ── endpoints ─────────────────────────────────────────────────────────────────────
 
@@ -151,26 +166,35 @@ object GamehubTv {
 
     fun cachedHome(c: Context): Home? = readCache(c, "home")?.let { runCatching { parseHome(JSONObject(it)) }.getOrNull() }
 
-    /** [filters]: optional `fav=1`, `year=`, `source=`, `session=` (game collections). */
-    fun shots(c: Context, collection: String, before: String? = null, limit: Int = 60, filters: Map<String, String> = emptyMap()): Res<ShotPage> {
+    /**
+     * [filters]: optional `fav=1`, `year=`, `source=`, `session=` (game collections). [kw]: keywords
+     * a capture must all have (`kw=` repeated, round 5).
+     */
+    fun shots(c: Context, collection: String, before: String? = null, limit: Int = 60, filters: Map<String, String> = emptyMap(), kw: List<String> = emptyList()): Res<ShotPage> {
         val q = StringBuilder("/api/device/v1/shots?c=").append(enc(collection)).append("&limit=").append(limit)
         if (before != null) q.append("&before=").append(enc(before))
         for ((k, v) in filters.toSortedMap()) q.append('&').append(enc(k)).append('=').append(enc(v))
+        for (k in kwKey(kw)) q.append("&kw=").append(enc(k))
         val r = get(c, q.toString())
         if (r is Res.Ok) {
             val page = try { parsePage(JSONObject(r.value)) } catch (e: Exception) { return Res.Err(Fail.SERVER, "bad page: ${e.message}") }
-            if (before == null) writeCache(c, "c-" + sha1(cacheKey(collection, filters)), r.value)
+            if (before == null) writeCache(c, "c-" + sha1(cacheKey(collection, filters, kw)), r.value)
             return Res.Ok(page)
         }
         return r as Res.Err
     }
 
-    private fun cacheKey(collection: String, filters: Map<String, String>) =
-        if (filters.isEmpty()) collection else collection + "?" + filters.toSortedMap().entries.joinToString("&") { it.key + "=" + it.value }
+    /** Keyword names compare case-insensitively on the hub: one spelling, one order. */
+    private fun kwKey(kw: List<String>) = kw.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+
+    private fun cacheKey(collection: String, filters: Map<String, String>, kw: List<String> = emptyList()): String {
+        val parts = filters.toSortedMap().entries.map { it.key + "=" + it.value } + kwKey(kw).map { "kw=" + it.lowercase() }
+        return if (parts.isEmpty()) collection else collection + "?" + parts.joinToString("&")
+    }
 
     /** The first page of [collection] as last seen, or null. */
-    fun cachedShots(c: Context, collection: String, filters: Map<String, String> = emptyMap()): ShotPage? =
-        readCache(c, "c-" + sha1(cacheKey(collection, filters)))?.let { runCatching { parsePage(JSONObject(it)) }.getOrNull() }
+    fun cachedShots(c: Context, collection: String, filters: Map<String, String> = emptyMap(), kw: List<String> = emptyList()): ShotPage? =
+        readCache(c, "c-" + sha1(cacheKey(collection, filters, kw)))?.let { runCatching { parsePage(JSONObject(it)) }.getOrNull() }
 
     // ── game hub and library edits (gamehub branch tv-hub) ────────────────────────────
 
@@ -231,6 +255,189 @@ object GamehubTv {
         return Res.Ok(runCatching { shotOf(JSONObject(r.value)) }.getOrNull())
     }
 
+    /** Everyone who can be tagged, newest tagged first (GET /people?all=1); not cached. */
+    fun peopleAll(c: Context): Res<List<Person>> {
+        val r = get(c, "/api/device/v1/people?all=1")
+        if (r !is Res.Ok) return r as Res.Err
+        return try {
+            val t = r.value.trim()
+            val arr = if (t.startsWith("[")) JSONArray(t) else JSONObject(t).let { it.optJSONArray("people") ?: it.optJSONArray("items") ?: JSONArray() }
+            val out = ArrayList<Person>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = str(o, "id") ?: continue
+                out.add(Person(id, str(o, "name") ?: id))
+            }
+            Res.Ok(out)
+        } catch (e: Exception) {
+            Res.Err(Fail.SERVER, "bad people: ${e.message}")
+        }
+    }
+
+    /** Every keyword (GET /keywords, a bare array): presets first, then by use. */
+    fun keywords(c: Context): Res<List<Keyword>> {
+        val r = get(c, "/api/device/v1/keywords")
+        if (r !is Res.Ok) return r as Res.Err
+        return try {
+            val t = r.value.trim()
+            val arr = if (t.startsWith("[")) JSONArray(t) else JSONObject(t).let { it.optJSONArray("keywords") ?: it.optJSONArray("items") ?: JSONArray() }
+            val out = ArrayList<Keyword>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val name = str(o, "name") ?: continue
+                out.add(Keyword(name, o.optInt("count", 0), o.optBoolean("preset", false)))
+            }
+            writeCache(c, "keywords", t)
+            Res.Ok(out)
+        } catch (e: Exception) {
+            Res.Err(Fail.SERVER, "bad keywords: ${e.message}")
+        }
+    }
+
+    /** POST /shots/<id>/keywords; the updated capture when the hub sends it. */
+    fun setKeywords(c: Context, shotId: String, add: List<String>, remove: List<String>): Res<Shot?> {
+        val body = JSONObject().put("add", JSONArray(add)).put("remove", JSONArray(remove))
+        val r = send(c, "POST", "/api/device/v1/shots/" + seg(shotId) + "/keywords", body.toString())
+        if (r !is Res.Ok) return r as Res.Err
+        return Res.Ok(runCatching { shotOf(JSONObject(r.value)) }.getOrNull())
+    }
+
+    // ── import (round 5) ──────────────────────────────────────────────────────────────
+
+    data class ImportProgress(val done: Int, val total: Int, val etaSec: Int?) {
+        val running get() = total > done
+    }
+
+    data class ImportGame(
+        val appid: Long,
+        val name: String,
+        val cover: String?,
+        val logo: String?,
+        val total: Int,
+        val imported: Int,
+        val queued: Int,
+        val failed: Int,
+        val importing: Boolean,
+        val last: Long,
+    )
+
+    data class ImportScan(val running: Boolean, val lastDone: Long, val total: Int, val error: String?)
+
+    data class ImportState(
+        val enabled: Boolean,
+        val reason: String?,
+        val scan: ImportScan,
+        val progress: ImportProgress,
+        val games: List<ImportGame>,
+    )
+
+    /** One batch's answer: [claimed] 0 means nothing was ready; [stopped] is Steam pushing back. */
+    data class ImportBatch(
+        val imported: Int,
+        val claimed: Int,
+        val failed: Int,
+        val stopped: String?,
+        val progress: ImportProgress?,
+        val games: List<ImportGame>,
+    )
+
+    private fun progressOf(o: JSONObject?): ImportProgress? {
+        if (o == null) return null
+        val eta = if (o.has("etaSec") && !o.isNull("etaSec")) o.optInt("etaSec", -1).takeIf { it >= 0 } else null
+        return ImportProgress(o.optInt("done", 0), o.optInt("total", 0), eta)
+    }
+
+    private fun importGameOf(o: JSONObject, old: ImportGame? = null): ImportGame? {
+        val appid = o.optLong("appid", 0L)
+        if (appid <= 0L) return null
+        fun int(k: String, d: Int) = if (o.has(k) && !o.isNull(k)) o.optInt(k, d) else d
+        return ImportGame(
+            appid = appid,
+            name = str(o, "name") ?: old?.name ?: str(o, "game") ?: "App $appid",
+            cover = str(o, "cover") ?: old?.cover,
+            logo = str(o, "logo") ?: old?.logo,
+            total = int("total", old?.total ?: 0),
+            imported = int("imported", old?.imported ?: 0),
+            queued = int("queued", old?.queued ?: 0),
+            failed = int("failed", old?.failed ?: 0),
+            importing = if (o.has("importing") && !o.isNull("importing")) o.optBoolean("importing") else old?.importing ?: false,
+            last = if (o.has("last") && !o.isNull("last")) o.optLong("last", 0L) else old?.last ?: 0L,
+        )
+    }
+
+    /** Fresh counts from a batch merged into [old] (a batch answer carries only some fields). */
+    fun mergeImportGame(old: ImportGame, fresh: ImportGame): ImportGame = old.copy(
+        total = fresh.total, imported = fresh.imported, queued = fresh.queued, failed = fresh.failed, importing = fresh.importing,
+    )
+
+    private fun importGamesOf(a: JSONArray?): List<ImportGame> {
+        if (a == null) return emptyList()
+        val out = ArrayList<ImportGame>(a.length())
+        for (i in 0 until a.length()) a.optJSONObject(i)?.let { importGameOf(it) }?.let(out::add)
+        return out
+    }
+
+    fun importState(c: Context): Res<ImportState> {
+        val r = get(c, "/api/device/v1/import")
+        if (r !is Res.Ok) return r as Res.Err
+        return try {
+            val o = JSONObject(r.value)
+            val sc = o.optJSONObject("scan")
+            Res.Ok(ImportState(
+                enabled = o.optBoolean("enabled", true),
+                reason = str(o, "reason"),
+                scan = ImportScan(sc?.optBoolean("running", false) ?: false, sc?.optLong("lastDone", 0L) ?: 0L, sc?.optInt("total", 0) ?: 0, sc?.let { str(it, "error") }),
+                progress = progressOf(o.optJSONObject("progress")) ?: ImportProgress(0, 0, null),
+                games = importGamesOf(o.optJSONArray("games")),
+            ))
+        } catch (e: Exception) {
+            Res.Err(Fail.SERVER, "bad import: ${e.message}")
+        }
+    }
+
+    /** Switches one game's import on or off; returns the run's progress. */
+    fun setImport(c: Context, appid: Long, on: Boolean): Res<ImportProgress?> {
+        val r = send(c, "POST", "/api/device/v1/import/games/$appid", JSONObject().put("import", on).toString())
+        if (r !is Res.Ok) return r as Res.Err
+        return Res.Ok(runCatching { progressOf(JSONObject(r.value).optJSONObject("progress")) }.getOrNull())
+    }
+
+    /** Import all (or, with [on] false, switch every game off). */
+    fun importAll(c: Context, on: Boolean = true): Res<ImportProgress?> {
+        val body = if (on) JSONObject() else JSONObject().put("import", false)
+        val r = send(c, "POST", "/api/device/v1/import/all", body.toString(), routeOnly = true)
+        if (r !is Res.Ok) return r as Res.Err
+        return Res.Ok(runCatching { progressOf(JSONObject(r.value).optJSONObject("progress")) }.getOrNull())
+    }
+
+    /** Starts (or keeps reading) the inventory scan; the scan state after this call. */
+    fun importScan(c: Context): Res<ImportScan?> {
+        val r = send(c, "POST", "/api/device/v1/import/scan", JSONObject().toString(), routeOnly = true)
+        if (r !is Res.Ok) return r as Res.Err
+        return Res.Ok(runCatching {
+            JSONObject(r.value).optJSONObject("scan")?.let { sc -> ImportScan(sc.optBoolean("running", false), sc.optLong("lastDone", 0L), sc.optInt("total", 0), str(sc, "error")) }
+        }.getOrNull())
+    }
+
+    /** Imports the next few queued files now (one call at a time; each takes a few seconds). */
+    fun importBatch(c: Context): Res<ImportBatch> {
+        val r = send(c, "POST", "/api/device/v1/import/batch", JSONObject().toString(), routeOnly = true, readTimeoutMs = 60_000)
+        if (r !is Res.Ok) return r as Res.Err
+        return try {
+            val o = JSONObject(r.value)
+            Res.Ok(ImportBatch(
+                imported = o.optInt("imported", 0),
+                claimed = o.optInt("claimed", 0),
+                failed = o.optInt("failed", 0),
+                stopped = str(o, "stopped"),
+                progress = progressOf(o.optJSONObject("progress")),
+                games = importGamesOf(o.optJSONArray("games")),
+            ))
+        } catch (e: Exception) {
+            Res.Err(Fail.SERVER, "bad batch: ${e.message}")
+        }
+    }
+
     private fun achievementsOf(a: JSONArray?): List<Achievement> {
         if (a == null) return emptyList()
         val out = ArrayList<Achievement>()
@@ -267,6 +474,16 @@ object GamehubTv {
         f?.optJSONArray("years")?.let { a -> for (i in 0 until a.length()) a.optInt(i, 0).takeIf { it > 0 }?.let(years::add) }
         val sources = ArrayList<String>()
         f?.optJSONArray("sources")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotBlank() }?.let(sources::add) }
+        val keywords = ArrayList<KeywordCount>()
+        f?.optJSONArray("keywords")?.let { a ->
+            for (i in 0 until a.length()) {
+                val k = a.opt(i)
+                when (k) {
+                    is JSONObject -> str(k, "name")?.let { keywords.add(KeywordCount(it, k.optInt("count", 0))) }
+                    is String -> if (k.isNotBlank()) keywords.add(KeywordCount(k, 0))
+                }
+            }
+        }
         val sessions = ArrayList<SessionInfo>()
         f?.optJSONArray("sessions")?.let { a ->
             for (i in 0 until a.length()) {
@@ -289,6 +506,7 @@ object GamehubTv {
             years = years,
             sources = sources,
             sessionList = sessions,
+            keywords = keywords,
         )
     }
 
@@ -300,17 +518,27 @@ object GamehubTv {
     /** What Steam says is running now: (appid, game) or null. */
     data class Now(val appid: Long, val game: String?)
 
+    /** GET /now: the game (null when nothing plays) and a running import (round 5), or null. */
+    data class NowStatus(val now: Now?, val importing: ImportProgress?)
+
     fun now(c: Context): Res<Now?> {
+        val r = nowStatus(c)
+        return if (r is Res.Ok) Res.Ok(r.value.now) else r as Res.Err
+    }
+
+    fun nowStatus(c: Context): Res<NowStatus> {
         val r = get(c, "/api/device/v1/now")
         if (r !is Res.Ok) return r as Res.Err
-        // The hub answers the literal `null` when nothing is playing.
+        // The hub answers the literal `null` when nothing is playing and nothing is importing.
         val t = r.value.trim()
-        if (t.isEmpty() || t == "null") return Res.Ok(null)
+        if (t.isEmpty() || t == "null") return Res.Ok(NowStatus(null, null))
         return try {
             val o = JSONObject(t)
             val n = if (o.has("nowPlaying")) o.optJSONObject("nowPlaying") else o
-            val appid = n?.optLong("appid", 0L) ?: 0L
-            Res.Ok(if (n == null || appid <= 0L) null else Now(appid, str(n, "game")))
+            // appid null (an import with nothing playing) reads as 0: nothing playing.
+            val appid = if (n == null || n.isNull("appid")) 0L else n.optLong("appid", 0L)
+            val imp = progressOf(o.optJSONObject("importing"))?.takeIf { it.total > 0 }
+            Res.Ok(NowStatus(if (n == null || appid <= 0L) null else Now(appid, str(n, "game")), imp))
         } catch (e: Exception) {
             Res.Err(Fail.SERVER, "bad now: ${e.message}")
         }
@@ -351,13 +579,6 @@ object GamehubTv {
         if (status != null) body.put("status", status)
         val r = send(c, "POST", "/api/device/v1/shots/" + enc(id), body.toString())
         return if (r is Res.Ok) Res.Ok(Unit) else r as Res.Err
-    }
-
-    /** [game] null keeps the unnamed captures. Returns how many the hub kept. */
-    fun keepAll(c: Context, game: String?): Res<Int> {
-        val r = send(c, "POST", "/api/device/v1/inbox/keep-all", JSONObject().put("game", game ?: JSONObject.NULL).toString())
-        if (r !is Res.Ok) return r as Res.Err
-        return Res.Ok(runCatching { JSONObject(r.value).optInt("count", -1) }.getOrDefault(-1))
     }
 
     fun games(c: Context): Res<List<Coll>> = list(c, "games") { o -> collOf(o, "game") }
@@ -490,6 +711,15 @@ object GamehubTv {
             status = str(o, "status"),
             people = people,
             peopleIds = o.optJSONArray("peopleIds")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).takeIf { v -> v.isNotBlank() } } } ?: emptyList(),
+            keywords = o.optJSONArray("keywords")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    when (val k = a.opt(i)) {
+                        is String -> k.takeIf { it.isNotBlank() }
+                        is JSONObject -> str(k, "name")
+                        else -> null
+                    }
+                }
+            } ?: emptyList(),
             note = str(o, "note"),
             previewUrl = preview,
             fullUrl = full,
@@ -592,10 +822,11 @@ object GamehubTv {
      * [Fail.GONE], never "update Gamehub". [routeOnly]: a write with no target in its path, so its
      * 404 can only mean the route is missing.
      */
-    private fun send(c: Context, method: String, path: String, json: String?, routeOnly: Boolean = false): Res<String> {
+    private fun send(c: Context, method: String, path: String, json: String?, routeOnly: Boolean = false, readTimeoutMs: Int = 0): Res<String> {
         if (GamehubStore.token(c) == null) return Res.Err(Fail.NOT_LINKED, "not linked")
         return try {
             val conn = open(c, method, base(c) + path) ?: return Res.Err(Fail.NOT_LINKED, "not linked")
+            if (readTimeoutMs > 0) conn.readTimeout = readTimeoutMs
             try {
                 if (json != null) {
                     val bytes = json.toByteArray()
@@ -617,6 +848,7 @@ object GamehubTv {
                     status in 300..399 -> Res.Err(Fail.NOT_DEPLOYED, "HTTP $status (Access)")
                     status == 401 -> { onUnauthorized(c); Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status") }
                     status == 403 -> Res.Err(Fail.UNAUTHORIZED, errorOf(text) ?: "HTTP $status")
+                    status == 429 -> Res.Err(Fail.BUSY, errorOf(text) ?: "HTTP 429")
                     else -> Res.Err(Fail.SERVER, errorOf(text) ?: "HTTP $status")
                 }
             } finally {
