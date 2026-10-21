@@ -273,12 +273,16 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         /** Rebuilds the rows; [keep] puts focus back on the same position (a toggle in a list). */
         private fun rows(keep: Boolean = false, build: (MutableList<View>) -> Unit) {
             val at = if (keep) (0 until col.childCount).indexOfFirst { col.getChildAt(it).hasFocus() } else -1
+            // Park focus on the panel while its rows are replaced, so removing the focused row
+            // never sends focus to the page underneath (where it could switch a tab).
+            if (at >= 0) { panel.isFocusable = true; panel.requestFocus() }
             col.removeAllViews()
             val list = ArrayList<View>()
             build(list)
             for (v in list) col.addView(v)
             if (at >= 0) {
                 col.getChildAt(at.coerceAtMost(col.childCount - 1))?.requestFocus()
+                panel.isFocusable = false
             } else {
                 scroll.scrollTo(0, 0)
                 col.getChildAt(0)?.requestFocus()

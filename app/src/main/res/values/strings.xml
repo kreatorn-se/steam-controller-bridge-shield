@@ -355,7 +355,7 @@
     <string name="tv_loading_title">Loading your library…</string>
     <string name="tv_link_eyebrow">Gamehub</string>
     <string name="tv_link_title">Your captures, on the big screen</string>
-    <string name="tv_link_body">Link this Shield to Gamehub to show screenshots from the Shield, Steam and the Deck here, run slideshows for guests and sort the Inbox with the controller.</string>
+    <string name="tv_link_body">Link this Shield to Gamehub to show screenshots from the Shield, Steam and the Deck here, run slideshows for guests and import from Steam with the controller.</string>
     <string name="tv_link_button">Link this Shield</string>
     <string name="tv_relink_title">Link this Shield again</string>
     <string name="tv_relink_body">Gamehub no longer accepts this Shield\'s key. Get a new code under Devices on the website.</string>
