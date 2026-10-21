@@ -18,6 +18,8 @@ import java.util.TimeZone
  */
 object CaptureStore {
     const val TMP_PREFIX = "tmp_"
+    /** A finished screencap waiting for [CaptureLevels]; becomes `<id>.png` once processed. */
+    const val RAW_SUFFIX = ".raw"
     private const val PREVIEW_MAX_WIDTH = 1600
     private val IEND = byteArrayOf(0x49, 0x45, 0x4E, 0x44) // "IEND"
 
@@ -86,7 +88,9 @@ object CaptureStore {
     }
 
     fun pendingCount(context: Context): Int =
-        dir(context)?.listFiles { f: java.io.File -> f.name.endsWith(".png") && !f.name.startsWith(TMP_PREFIX) }?.size ?: 0
+        dir(context)?.listFiles { f: java.io.File ->
+            (f.name.endsWith(".png") || f.name.endsWith(RAW_SUFFIX)) && !f.name.startsWith(TMP_PREFIX)
+        }?.size ?: 0
 
     /** Moves a capture the hub refused out of the queue (kept as .rejected for inspection). */
     fun reject(context: Context, id: String) {
