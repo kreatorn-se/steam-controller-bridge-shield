@@ -29,7 +29,7 @@ import java.util.concurrent.Executors
  * A `<id>.lvtry` marker exists while a capture is being decoded. If the process dies with it in
  * place (lmkd killing the app for the 33 MB bitmap is the likely cause), the orphan pass publishes
  * that capture as captured instead of trying again, so one capture can never cause a kill loop.
- * The decision travels with the upload as `levels: {p1, p99, expanded}` in `<id>.json`.
+ * The decision travels with the upload as `levels: {p1, p5, p99, expanded}` in `<id>.json`.
  */
 object CaptureLevels {
     private const val TAG = "CaptureLevels"
@@ -139,9 +139,9 @@ object CaptureLevels {
             }
             val secs = (SystemClock.elapsedRealtime() - started) / 1000.0
             val line = when (outcome) {
-                is Outcome.Expanded -> "capture levels $id limited p1=${outcome.levels.p1} p99=${outcome.levels.p99}" +
+                is Outcome.Expanded -> "capture levels $id limited ${fmtLevels(outcome.levels)}" +
                     " -> expanded 16-235 to 0-255 in ${fmt(secs)} s"
-                is Outcome.Unchanged -> "capture levels $id full p1=${outcome.levels.p1} p99=${outcome.levels.p99}" +
+                is Outcome.Unchanged -> "capture levels $id full ${fmtLevels(outcome.levels)}" +
                     " -> unchanged (${fmt(secs)} s)"
                 is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> left as captured"
             }
@@ -150,8 +150,8 @@ object CaptureLevels {
 
             // Into <id>.json before the PNG appears, so the upload carries it.
             CaptureStore.addLevels(queueDir, id, when (outcome) {
-                is Outcome.Expanded -> JSONObject().put("p1", outcome.levels.p1).put("p99", outcome.levels.p99).put("expanded", true)
-                is Outcome.Unchanged -> JSONObject().put("p1", outcome.levels.p1).put("p99", outcome.levels.p99).put("expanded", false)
+                is Outcome.Expanded -> levelsJson(outcome.levels).put("expanded", true)
+                is Outcome.Unchanged -> levelsJson(outcome.levels).put("expanded", false)
                 is Outcome.Failed -> JSONObject().put("expanded", false).put("error", outcome.reason.take(120))
             })
 
@@ -295,4 +295,8 @@ object CaptureLevels {
     }
 
     private fun fmt(v: Double) = String.format(Locale.US, "%.1f", v)
+
+    private fun fmtLevels(l: LevelsMath.Levels) = "p1=${l.p1} p5=${l.p5} p99=${l.p99}"
+
+    private fun levelsJson(l: LevelsMath.Levels) = JSONObject().put("p1", l.p1).put("p5", l.p5).put("p99", l.p99)
 }

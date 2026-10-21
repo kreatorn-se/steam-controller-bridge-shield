@@ -122,17 +122,17 @@ class LevelsMathTest {
         assertEquals(0, hist.indexOfFirst { it > 0 }) // min is 0 ...
         assertEquals(255, hist.indexOfLast { it > 0 }) // ... max is 255 ...
         val lv = LevelsMath.measure(hist)
-        assertTrue("... but p1=${lv.p1} p99=${lv.p99}", lv.limited)
+        assertTrue("... but p5=${lv.p5} p99=${lv.p99}", lv.limited)
         assertTrue(lv.p99 <= LevelsMath.LIMITED_P99_MAX)
     }
 
     @Test
     fun brightFullRangeFrameWithoutBlacksIsLeftAlone() {
-        // A bright native screen (snow, a light UI): no true blacks, so p1 >= 12, but highlights
+        // A bright native screen (snow, a light UI): no true blacks, so p5 >= 14, but highlights
         // well above video white.
         val rows = List(64) { y -> IntArray(256) { x -> grey(60 + ((x * 3 + y * 7) % 196)) } }
         val lv = LevelsMath.measure(histOf(rows))
-        assertTrue("p1=${lv.p1}", lv.p1 >= LevelsMath.LIMITED_P1_MIN)
+        assertTrue("p5=${lv.p5}", lv.p5 >= LevelsMath.LIMITED_P5_MIN)
         assertTrue("p99=${lv.p99}", lv.p99 > LevelsMath.LIMITED_P99_MAX)
         assertFalse(lv.limited)
     }
@@ -148,15 +148,50 @@ class LevelsMathTest {
         assertFalse(LevelsMath.measure(h).limited)
     }
 
+    /**
+     * A histogram of 10 000 samples with exactly these percentiles: 1 % at [p1], 4 % at [p5],
+     * 93.5 % in the mid-tones and 1.5 % at [p99].
+     */
+    private fun histWith(p1: Int, p5: Int, p99: Int): IntArray {
+        require(p1 < p5 && p5 < p99 - 1)
+        val h = IntArray(256)
+        h[p1] += 100
+        h[p5] += 400
+        h[(p5 + p99) / 2] += 9_350
+        h[p99] += 150
+        return h
+    }
+
+    private fun assertMeasured(p1: Int, p5: Int, p99: Int, limited: Boolean) {
+        val lv = LevelsMath.measure(histWith(p1, p5, p99))
+        assertEquals(Triple(p1, p5, p99), Triple(lv.p1, lv.p5, lv.p99))
+        assertEquals("p1=$p1 p5=$p5 p99=$p99", limited, lv.limited)
+    }
+
     @Test
-    fun measuredShieldNumbersAreLimited() {
-        // p1 14..21 as measured on the 3840×2160 GFN captures
-        for (p1 in 14..21) {
-            val h = IntArray(256)
-            h[p1] = 1_000
-            h[(p1 + 120).coerceAtMost(211)] = 99_000
-            assertTrue("p1=$p1", LevelsMath.measure(h).limited)
-        }
+    fun measuredShieldCapturesWithDarkClusterAreLimited() {
+        // Real GFN captures, visibly washed out, that 1.4.3's p1 >= 12 rule missed: 1-2 % dark
+        // pixels clustered in one region pull p1 to 9-11, but p5 is 15-18.
+        assertMeasured(9, 16, 139, limited = true)
+        assertMeasured(9, 18, 72, limited = true)
+        assertMeasured(11, 15, 109, limited = true)
+        assertMeasured(11, 15, 106, limited = true)
+    }
+
+    @Test
+    fun measuredFullRangeCapturesAreLeftAlone() {
+        // The two genuinely full-range captures in the same set: dark pixels all over the frame.
+        assertMeasured(4, 8, 138, limited = false)
+        assertMeasured(3, 5, 112, limited = false)
+    }
+
+    @Test
+    fun earlierCorrectedCapturesStayLimited() {
+        // 1.4.3 expanded captures with p1 12-41; they must still qualify.
+        assertMeasured(12, 16, 150, limited = true)
+        assertMeasured(14, 20, 135, limited = true)
+        assertMeasured(21, 30, 211, limited = true)
+        assertMeasured(41, 50, 200, limited = true)
     }
 
     @Test
@@ -165,6 +200,7 @@ class LevelsMathTest {
         val rows = List(64) { y -> IntArray(256) { x -> grey((x + y * 4) % 256) } }
         val lv = LevelsMath.measure(histOf(rows))
         assertTrue("p1=${lv.p1}", lv.p1 <= 2)
+        assertTrue("p5=${lv.p5}", lv.p5 < LevelsMath.LIMITED_P5_MIN)
         assertFalse(lv.limited)
     }
 
@@ -178,11 +214,13 @@ class LevelsMathTest {
     }
 
     @Test
-    fun thresholdIsInclusiveAtTwelve() {
+    fun p5ThresholdIsInclusiveAtFourteen() {
         val h = IntArray(256)
-        h[12] = 50; h[100] = 4_950
+        h[14] = 250; h[100] = 4_750
+        assertEquals(14, LevelsMath.measure(h).p5)
         assertTrue(LevelsMath.measure(h).limited)
-        h[12] = 0; h[11] = 50
+        h[14] = 0; h[13] = 250
+        assertEquals(13, LevelsMath.measure(h).p5)
         assertFalse(LevelsMath.measure(h).limited)
     }
 

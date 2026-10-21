@@ -6,15 +6,17 @@ package com.steamcontroller.android.hub
  * GeForce NOW's video layer reaches `screencap` in limited ("TV") range: black sits at 16 and
  * white at 235 per channel, never expanded to full range. That reads as lifted blacks, low
  * contrast and dull colour. UI layers drawn on top (the status pill, system overlays) are full
- * range, so a capture may still hold a few true 0 and 255 pixels: detection therefore looks at
- * the 1st percentile of luminance, never the minimum.
+ * range, so a capture may still hold true 0 and 255 pixels: detection therefore looks at the 5th
+ * percentile of luminance, never the minimum. (1.4.3 used the 1st percentile; on real GFN frames
+ * a dark HUD or vignette can put 1–2 % of the pixels below video black in one region, p1 9–11,
+ * while full-range frames have 10–27 % dark pixels spread over the frame, p5 5–8.)
  */
 object LevelsMath {
     /** Grid step for sampling, in pixels along both axes (1/64 of the frame). */
     const val SAMPLE_STEP = 8
 
-    /** A capture whose 1st-percentile luminance is at least this is treated as limited range... */
-    const val LIMITED_P1_MIN = 12
+    /** A capture whose 5th-percentile luminance is at least this is treated as limited range... */
+    const val LIMITED_P5_MIN = 14
 
     /**
      * ...provided its 99th percentile is at most this: limited video tops out at 235, so a frame
@@ -35,7 +37,7 @@ object LevelsMath {
 
     /**
      * Rec.709 luma of an ARGB pixel, 0..255. Truncated rather than rounded, so a full-range UI
-     * background such as the app's own #0B0C0E (11.93) stays below [LIMITED_P1_MIN].
+     * background such as the app's own #0B0C0E (11.93) stays below [LIMITED_P5_MIN].
      */
     fun luma(argb: Int): Int {
         val r = (argb shr 16) and 0xFF
@@ -68,14 +70,15 @@ object LevelsMath {
         return hist.size - 1
     }
 
-    data class Levels(val p1: Int, val p99: Int, val samples: Long) {
-        val limited: Boolean get() = samples > 0 && p1 >= LIMITED_P1_MIN && p99 <= LIMITED_P99_MAX
+    /** Luminance percentiles of the sample; [p1] is only logged, [p5] and [p99] decide. */
+    data class Levels(val p1: Int, val p5: Int, val p99: Int, val samples: Long) {
+        val limited: Boolean get() = samples > 0 && p5 >= LIMITED_P5_MIN && p99 <= LIMITED_P99_MAX
     }
 
     fun measure(hist: IntArray): Levels {
         var total = 0L
         for (c in hist) total += c
-        return Levels(percentile(hist, 0.01), percentile(hist, 0.99), total)
+        return Levels(percentile(hist, 0.01), percentile(hist, 0.05), percentile(hist, 0.99), total)
     }
 
     /**
