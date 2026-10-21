@@ -15,6 +15,10 @@ class HoldKeysTest {
     private val ENTER = 66      // KEYCODE_ENTER
     private val RIGHT = 22      // KEYCODE_DPAD_RIGHT
 
+    private companion object {
+        const val REPEATS_IN_HOLD = 7
+    }
+
     private class Sim(val holdable: Boolean = true) {
         val keys = HoldKeys()
         var menuOpen = false
@@ -72,7 +76,11 @@ class HoldKeysTest {
 
         fun tap(code: Int) { key(code, true); key(code, false) }
 
-        fun hold(code: Int, repeatsBefore: Int = 20, repeatsAfter: Int = 10) {
+        /**
+         * Held past [HoldKeys.HOLD_MS]: Android repeats a held key after about 400 ms and then every
+         * 50 ms, so 0.75 s is a press plus about seven repeats before the ring completes.
+         */
+        fun hold(code: Int, repeatsBefore: Int = REPEATS_IN_HOLD, repeatsAfter: Int = 10) {
             key(code, true)
             for (r in 1..repeatsBefore) key(code, true, r)
             timer()
@@ -99,11 +107,18 @@ class HoldKeysTest {
         }
     }
 
+    @Test fun holdIsThreeQuartersOfASecond() {
+        assertEquals(750L, HoldKeys.HOLD_MS)
+        // A press plus its repeats up to the ring completing, at Android's 400 ms + 50 ms cadence.
+        assertEquals(REPEATS_IN_HOLD, ((HoldKeys.HOLD_MS - 400L) / 50L).toInt())
+    }
+
     @Test fun slowTapWithRepeatsStillClicks() {
         for (k in listOf(A, CENTER, ENTER)) {
             val s = Sim()
             s.key(k, true)
-            for (r in 1..8) s.key(k, true, r)
+            // Released at about 0.65 s: repeats have started, the ring has not completed.
+            for (r in 1..5) s.key(k, true, r)
             s.key(k, false)
             s.timer() // late timer after release must not fire
             assertEquals(1, s.clicks)
@@ -157,7 +172,7 @@ class HoldKeysTest {
         // A held to the menu, then released while ENTER taps a row.
         val s = Sim()
         s.key(A, true)
-        for (r in 1..20) s.key(A, true, r)
+        for (r in 1..REPEATS_IN_HOLD) s.key(A, true, r)
         s.timer()
         s.key(A, false)
         s.tap(ENTER)

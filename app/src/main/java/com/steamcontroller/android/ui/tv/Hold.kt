@@ -76,7 +76,7 @@ class HoldRing(ctx: Context) : View(ctx) {
 }
 
 /**
- * Hold OK for 1.5 s on any picture (home rows, game hubs, library grids, show mode and its
+ * Hold OK for 0.75 s ([HoldKeys.HOLD_MS]) on any picture (home rows, game hubs, library grids, show mode and its
  * filmstrip and grid): a small ring fills, then a compact menu opens with Favourite on top and
  * focused. A short tap still clicks as before; after a long press the key's release is
  * swallowed so it cannot click anything.
@@ -115,7 +115,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
         }
     }
 
-    /** Starts the ring over [v] (null: bottom centre, show mode) and [fire] after 1.5 s. */
+    /** Starts the ring over [v] (null: bottom centre, show mode) and [fire] after [HOLD_MS]. */
     fun arm(v: View?, fire: () -> Unit) {
         cancel()
         keys.arm()
@@ -524,7 +524,7 @@ class Hold(private val host: Host, private val layer: FrameLayout) {
     }
 
     companion object {
-        const val HOLD_MS = 1500L
+        const val HOLD_MS = HoldKeys.HOLD_MS
         const val RING_DP = 46
 
     }

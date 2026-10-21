@@ -76,6 +76,13 @@ class HoldKeys {
     private fun disarm(a: Act): Act { armed = false; return a }
 
     companion object {
+        /**
+         * How long OK must be held for the menu: 0.75 s (1.4.1 used 1.5 s). Android's first key
+         * repeat comes at about 0.4 s, so a hold is a fresh press plus a handful of repeats, well
+         * clear of a slow tap.
+         */
+        const val HOLD_MS = 750L
+
         fun isSelect(k: Int) = k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER ||
             k == KeyEvent.KEYCODE_NUMPAD_ENTER || k == KeyEvent.KEYCODE_BUTTON_A
     }
