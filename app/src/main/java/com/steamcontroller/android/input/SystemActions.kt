@@ -73,7 +73,7 @@ object SystemActions {
                 val linked = GamehubStore.isLinked(app)
                 // Unlinked, the capture is safely stored now; the level fix only changes its pixels.
                 if (!linked) Pill.show(app, Pill.Kind.SAVED, "SAVED")
-                CaptureLevels.submit(queueDir, id, raw, pictures) { published ->
+                CaptureLevels.submit(queueDir, id, raw, pictures, GamehubStore.captureSaturation(app)) { published ->
                     if (!published) {
                         Pill.show(app, Pill.Kind.FAILED, "CAPTURE FAILED")
                     } else if (linked) {

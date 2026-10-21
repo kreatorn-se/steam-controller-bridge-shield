@@ -333,6 +333,10 @@
     <string name="hub_tv">Slideshow on this TV</string>
     <string name="hub_slow_zoom">Slow zoom</string>
     <string name="hub_slow_zoom_hint">Gently zoom pictures in the slideshow, the screensaver and the home hero. Off shows every picture still, at its native fit.</string>
+    <string name="hub_capture_sat">Capture colour boost</string>
+    <string name="hub_capture_sat_hint">Extra saturation added to screenshots as they are saved, so they look as vivid as the TV. Off keeps the colours as captured.</string>
+    <string name="hub_capture_sat_off">Off</string>
+    <string name="hub_capture_sat_pct">%1$d %%</string>
     <string name="hub_ago_now">Just now</string>
     <string name="hub_ago_min">%1$d min ago</string>
     <string name="hub_ago_h">%1$d h ago</string>

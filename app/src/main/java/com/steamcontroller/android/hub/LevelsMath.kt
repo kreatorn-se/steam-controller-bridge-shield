@@ -97,4 +97,63 @@ object LevelsMath {
         }
         return alphaAnd
     }
+
+    // ------------------------------------------------------------------ saturation
+
+    /** The capture colour boost choices, in percent (0 = off). */
+    val SATURATION_CHOICES = listOf(0, 6, 12, 18, 25)
+    const val SATURATION_DEFAULT = 12
+
+    /**
+     * One channel of the saturation boost: round(Y + (c − Y) × k), k = 1 + [pct]/100, clamped to
+     * 0..255. [ys] is the Rec.709 luma of the pixel scaled by 10 000 (2126·R + 7152·G + 722·B,
+     * exact because the weights sum to 10 000), so the arithmetic is exact integer maths.
+     */
+    fun boostChannel(c: Int, ys: Int, pct: Int): Int {
+        // ×10⁶: Y·100 + (c − Y)·(100 + pct) with Y and c both ×10⁴
+        val num = ys * 100 + (c * 10_000 - ys) * (100 + pct)
+        return Math.floorDiv(num + 500_000, 1_000_000).coerceIn(0, 255)
+    }
+
+    /** The saturation boost of one ARGB pixel; alpha untouched, a grey pixel stays grey. */
+    fun saturate(argb: Int, pct: Int): Int {
+        if (pct == 0) return argb
+        val r = (argb shr 16) and 0xFF
+        val g = (argb shr 8) and 0xFF
+        val b = argb and 0xFF
+        val ys = 2126 * r + 7152 * g + 722 * b
+        return (argb and -0x1000000) or
+            (boostChannel(r, ys, pct) shl 16) or
+            (boostChannel(g, ys, pct) shl 8) or
+            boostChannel(b, ys, pct)
+    }
+
+    /**
+     * One pass over the first [count] pixels: the levels [lut] if given, then the saturation boost
+     * of [satPct] percent if above 0 (luma taken from the levelled values). Alpha is untouched.
+     * Returns the bitwise AND of their alpha values (0xFF: every pixel opaque).
+     */
+    fun process(px: IntArray, count: Int, lut: IntArray?, satPct: Int): Int {
+        var alphaAnd = 0xFF
+        val k = 100 + satPct
+        for (i in 0 until count) {
+            val c = px[i]
+            alphaAnd = alphaAnd and (c ushr 24)
+            var r = (c shr 16) and 0xFF
+            var g = (c shr 8) and 0xFF
+            var b = c and 0xFF
+            if (lut != null) {
+                r = lut[r]; g = lut[g]; b = lut[b]
+            }
+            if (satPct > 0) {
+                val ys = 2126 * r + 7152 * g + 722 * b
+                val y100 = ys * 100
+                r = (Math.floorDiv(y100 + (r * 10_000 - ys) * k + 500_000, 1_000_000)).coerceIn(0, 255)
+                g = (Math.floorDiv(y100 + (g * 10_000 - ys) * k + 500_000, 1_000_000)).coerceIn(0, 255)
+                b = (Math.floorDiv(y100 + (b * 10_000 - ys) * k + 500_000, 1_000_000)).coerceIn(0, 255)
+            }
+            px[i] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
+        }
+        return alphaAnd
+    }
 }

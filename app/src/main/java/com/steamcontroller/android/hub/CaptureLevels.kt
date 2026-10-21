@@ -29,7 +29,10 @@ import java.util.concurrent.Executors
  * A `<id>.lvtry` marker exists while a capture is being decoded. If the process dies with it in
  * place (lmkd killing the app for the 33 MB bitmap is the likely cause), the orphan pass publishes
  * that capture as captured instead of trying again, so one capture can never cause a kill loop.
- * The decision travels with the upload as `levels: {p1, p5, p99, expanded}` in `<id>.json`.
+ * Every capture then gets the capture colour boost (a saturation step around Rec.709 luma, in the
+ * same pass), unless it is set to Off; with Off and full-range levels the file is published as is.
+ * The decision travels with the upload as `levels: {p1, p5, p99, expanded, saturation}` in
+ * `<id>.json`.
  */
 object CaptureLevels {
     private const val TAG = "CaptureLevels"
@@ -41,7 +44,9 @@ object CaptureLevels {
     private const val UPLOAD_SETTLE_MS = 2_000L
 
     sealed class Outcome {
-        data class Expanded(val levels: LevelsMath.Levels) : Outcome()
+        /** Re-encoded: levels [expanded] and/or the saturation boost applied. */
+        data class Encoded(val levels: LevelsMath.Levels, val expanded: Boolean) : Outcome()
+        /** Neither applies (full range, boost off): published as captured. */
         data class Unchanged(val levels: LevelsMath.Levels) : Outcome()
         data class Failed(val reason: String) : Outcome()
     }
@@ -57,11 +62,12 @@ object CaptureLevels {
     }
 
     /**
-     * Queues [raw] (`<id>.raw` in [queueDir]) for processing; [done] runs on the worker thread
-     * after `<id>.png` is in place (true) or could not be published at all (false).
+     * Queues [raw] (`<id>.raw` in [queueDir]) for processing with a saturation boost of
+     * [saturation] percent (0 = off, see GamehubStore.captureSaturation); [done] runs on the worker
+     * thread after `<id>.png` is in place (true) or could not be published at all (false).
      */
-    fun submit(queueDir: File, id: String, raw: File, pictures: File? = null, done: (Boolean) -> Unit) {
-        submitJob(id, done) { finish(queueDir, id, raw, pictures) }
+    fun submit(queueDir: File, id: String, raw: File, pictures: File?, saturation: Int, done: (Boolean) -> Unit) {
+        submitJob(id, done) { finish(queueDir, id, raw, pictures, saturation.coerceIn(0, 100)) }
     }
 
     private fun submitJob(id: String, done: (Boolean) -> Unit, job: () -> Boolean) {
@@ -83,7 +89,7 @@ object CaptureLevels {
      * Captures a killed process left behind (called from the sync loop): a `.raw` with no attempt
      * marker is processed again; one whose attempt was interrupted is published as captured.
      */
-    fun resumeOrphans(queueDir: File, done: (Boolean) -> Unit) {
+    fun resumeOrphans(queueDir: File, saturation: Int, done: (Boolean) -> Unit) {
         val now = System.currentTimeMillis()
         val files = queueDir.listFiles() ?: return
         val raws = files.filter { it.isFile && it.name.endsWith(CaptureStore.RAW_SUFFIX) }
@@ -103,19 +109,19 @@ object CaptureLevels {
                     val line = "capture levels $id skipped after interrupted attempt -> left as captured"
                     Log.w(TAG, line)
                     Diagnostics.record(TAG, line)
-                    CaptureStore.addLevels(queueDir, id, JSONObject().put("expanded", false).put("error", "interrupted"))
+                    CaptureStore.addLevels(queueDir, id, JSONObject().put("expanded", false).put("saturation", 0).put("error", "interrupted"))
                     val ok = File(queueDir, "$id.png").isFile && raw.delete() || publish(raw, File(queueDir, "$id.png"), raw.lastModified())
                     marker.delete()
                     ok
                 }
             } else {
                 Log.i(TAG, "resuming orphaned capture $id")
-                submit(queueDir, id, raw, null, done)
+                submit(queueDir, id, raw, null, saturation, done)
             }
         }
     }
 
-    private fun finish(queueDir: File, id: String, raw: File, pictures: File?): Boolean {
+    private fun finish(queueDir: File, id: String, raw: File, pictures: File?, saturation: Int): Boolean {
         val png = File(queueDir, "$id.png")
         if (png.isFile) {
             // Published before a crash took the process; only the original is left to drop.
@@ -131,31 +137,33 @@ object CaptureLevels {
             try { marker.writeText(System.currentTimeMillis().toString()) } catch (t: Throwable) { Log.w(TAG, "no attempt marker for $id: ${t.message}") }
             val started = SystemClock.elapsedRealtime()
             val outcome = try {
-                expandInto(raw, out)
+                processInto(raw, out, saturation)
             } catch (_: OutOfMemoryError) {
                 Outcome.Failed("out of memory")
             } catch (t: Throwable) {
                 Outcome.Failed(t.javaClass.simpleName + (t.message?.let { ": $it" } ?: ""))
             }
             val secs = (SystemClock.elapsedRealtime() - started) / 1000.0
+            val sat = if (saturation > 0) "sat+$saturation%" else "sat off"
             val line = when (outcome) {
-                is Outcome.Expanded -> "capture levels $id limited ${fmtLevels(outcome.levels)}" +
-                    " -> expanded 16-235 to 0-255 in ${fmt(secs)} s"
+                is Outcome.Encoded -> "capture levels $id ${if (outcome.expanded) "limited" else "full"} ${fmtLevels(outcome.levels)}" +
+                    " -> ${if (outcome.expanded) "expanded 16-235 to 0-255" else "levels unchanged"}, $sat in ${fmt(secs)} s"
                 is Outcome.Unchanged -> "capture levels $id full ${fmtLevels(outcome.levels)}" +
-                    " -> unchanged (${fmt(secs)} s)"
-                is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> left as captured"
+                    " -> unchanged, $sat (${fmt(secs)} s)"
+                is Outcome.Failed -> "capture levels $id failed (${outcome.reason}) -> left as captured, $sat not applied"
             }
             Log.i(TAG, line)
             Diagnostics.record(TAG, line)
 
             // Into <id>.json before the PNG appears, so the upload carries it.
             CaptureStore.addLevels(queueDir, id, when (outcome) {
-                is Outcome.Expanded -> levelsJson(outcome.levels).put("expanded", true)
-                is Outcome.Unchanged -> levelsJson(outcome.levels).put("expanded", false)
-                is Outcome.Failed -> JSONObject().put("expanded", false).put("error", outcome.reason.take(120))
+                // saturation: the boost actually applied, in percent (0 when off or not applied)
+                is Outcome.Encoded -> levelsJson(outcome.levels).put("expanded", outcome.expanded).put("saturation", saturation)
+                is Outcome.Unchanged -> levelsJson(outcome.levels).put("expanded", false).put("saturation", 0)
+                is Outcome.Failed -> JSONObject().put("expanded", false).put("saturation", 0).put("error", outcome.reason.take(120))
             })
 
-            val published = if (outcome is Outcome.Expanded) {
+            val published = if (outcome is Outcome.Encoded) {
                 // Publish first, drop the original after: a crash in between leaves both, and the
                 // orphan pass then finds png present and only cleans up.
                 val moved = out.renameTo(png)
@@ -171,7 +179,7 @@ object CaptureLevels {
                 out.delete()
                 publish(raw, png, rawMtime)
             }
-            if (published && pictures != null && outcome is Outcome.Expanded) writeBackPictures(png, pictures)
+            if (published && pictures != null && outcome is Outcome.Encoded) writeBackPictures(png, pictures)
             return published
         } finally {
             marker.delete()
@@ -230,15 +238,16 @@ object CaptureLevels {
     }
 
     /**
-     * Decodes once, measures, and if limited writes the expanded PNG to [out] (complete before
-     * this returns). Holds [CaptureStore.decodeLock] throughout, so the uploader's preview decode
-     * never runs alongside it.
+     * Decodes once, measures, and when the levels are limited and/or [saturation] is above 0,
+     * applies both in one row-batched pass and writes the PNG to [out] (complete before this
+     * returns). Holds [CaptureStore.decodeLock] throughout, so the uploader's preview decode never
+     * runs alongside it.
      */
-    private fun expandInto(src: File, out: File): Outcome {
-        return synchronized(CaptureStore.decodeLock) { expandLocked(src, out) }
+    private fun processInto(src: File, out: File, saturation: Int): Outcome {
+        return synchronized(CaptureStore.decodeLock) { processLocked(src, out, saturation) }
     }
 
-    private fun expandLocked(src: File, out: File): Outcome {
+    private fun processLocked(src: File, out: File, saturation: Int): Outcome {
         val opts = BitmapFactory.Options().apply {
             inMutable = true
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -259,15 +268,16 @@ object CaptureLevels {
                 y += LevelsMath.SAMPLE_STEP
             }
             val levels = LevelsMath.measure(hist)
-            if (!levels.limited) return Outcome.Unchanged(levels)
+            val expand = levels.limited
+            if (!expand && saturation <= 0) return Outcome.Unchanged(levels)
 
-            val lut = LevelsMath.EXPAND_LUT
+            val lut = if (expand) LevelsMath.EXPAND_LUT else null
             var alphaAnd = 0xFF
             var y0 = 0
             while (y0 < h) {
                 val rows = minOf(BAND_ROWS, h - y0)
                 bmp.getPixels(buf, 0, w, 0, y0, w, rows)
-                alphaAnd = alphaAnd and LevelsMath.applyLut(buf, w * rows, lut)
+                alphaAnd = alphaAnd and LevelsMath.process(buf, w * rows, lut, saturation)
                 bmp.setPixels(buf, 0, w, 0, y0, w, rows)
                 y0 += rows
             }
@@ -285,7 +295,7 @@ object CaptureLevels {
                 out.delete()
                 return Outcome.Failed("re-encoded PNG incomplete")
             }
-            return Outcome.Expanded(levels)
+            return Outcome.Encoded(levels, expand)
         } catch (t: Throwable) {
             out.delete()
             throw t

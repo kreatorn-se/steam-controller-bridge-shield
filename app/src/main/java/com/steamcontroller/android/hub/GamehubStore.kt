@@ -20,6 +20,7 @@ object GamehubStore {
     private const val K_LAST_OK = "last_ok_at"
     private const val K_LAST_ERROR = "last_error"
     private const val K_AUTO_SHIZUKU = "auto_start_shizuku"
+    private const val K_CAPTURE_SAT = "capture_saturation"
 
     private fun p(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -55,4 +56,12 @@ object GamehubStore {
 
     fun autoStartShizuku(c: Context): Boolean = p(c).getBoolean(K_AUTO_SHIZUKU, true)
     fun setAutoStartShizuku(c: Context, on: Boolean) { p(c).edit().putBoolean(K_AUTO_SHIZUKU, on).apply() }
+
+    /** Capture colour boost in percent, one of [LevelsMath.SATURATION_CHOICES]; 0 = off. */
+    fun captureSaturation(c: Context): Int =
+        p(c).getInt(K_CAPTURE_SAT, LevelsMath.SATURATION_DEFAULT).takeIf { it in LevelsMath.SATURATION_CHOICES }
+            ?: LevelsMath.SATURATION_DEFAULT
+    fun setCaptureSaturation(c: Context, pct: Int) {
+        if (pct in LevelsMath.SATURATION_CHOICES) p(c).edit().putInt(K_CAPTURE_SAT, pct).apply()
+    }
 }

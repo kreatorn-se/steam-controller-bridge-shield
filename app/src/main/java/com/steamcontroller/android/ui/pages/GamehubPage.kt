@@ -12,6 +12,7 @@ import com.steamcontroller.android.hub.CaptureStore
 import com.steamcontroller.android.hub.GamehubClient
 import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.hub.GamehubSync
+import com.steamcontroller.android.hub.LevelsMath
 import com.steamcontroller.android.shizuku.ShizukuAdbStarter
 import com.steamcontroller.android.ui.Host
 import com.steamcontroller.android.ui.Page
@@ -20,6 +21,7 @@ import com.steamcontroller.android.ui.pill.Pill
 import com.steamcontroller.android.ui.theme.C
 import com.steamcontroller.android.ui.theme.dp
 import com.steamcontroller.android.ui.theme.isWide
+import com.steamcontroller.android.ui.widget.ChoiceRow
 import com.steamcontroller.android.ui.widget.CodeEntryView
 import com.steamcontroller.android.ui.widget.DotView
 import com.steamcontroller.android.ui.widget.Kit
@@ -38,6 +40,7 @@ class GamehubPage(host: Host) : Page(host) {
     private val bootCard = Kit.card(ctx, 22)
     private val tvCard = Kit.card(ctx, 22)
     private lateinit var zoomRow: ToggleRow
+    private lateinit var satRow: ChoiceRow
     private val testResult = Kit.body(ctx, ctx.getString(R.string.hub_test_hint), 13f, C.text2)
     private var focusFirst: View? = null
     private var refreshedAt = 0L
@@ -73,8 +76,8 @@ class GamehubPage(host: Host) : Page(host) {
         }
     }
 
-    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh() }
-    override fun onShow() { renderLink(); zoomRow.refresh() }
+    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); satRow.refresh() }
+    override fun onShow() { renderLink(); zoomRow.refresh(); satRow.refresh() }
 
     override fun onFrame(f: LiveFrame) {
         val now = android.os.SystemClock.uptimeMillis()
@@ -223,6 +226,13 @@ class GamehubPage(host: Host) : Page(host) {
         zoomRow = ToggleRow(ctx, ctx.getString(R.string.hub_slow_zoom), ctx.getString(R.string.hub_slow_zoom_hint),
             { com.steamcontroller.android.ui.tv.TvPrefs.slowZoom(ctx) }, { com.steamcontroller.android.ui.tv.TvPrefs.setSlowZoom(ctx, it) })
         tvCard.addView(zoomRow, Kit.lp(t = 10, ctx = ctx))
+        // Applied when a capture is saved (CaptureLevels); select cycles Off → 6 → 12 → 18 → 25 %.
+        val sats = LevelsMath.SATURATION_CHOICES
+        satRow = ChoiceRow(ctx, ctx.getString(R.string.hub_capture_sat), ctx.getString(R.string.hub_capture_sat_hint),
+            sats.map { if (it == 0) ctx.getString(R.string.hub_capture_sat_off) else ctx.getString(R.string.hub_capture_sat_pct, it) },
+            { sats.indexOf(GamehubStore.captureSaturation(ctx)).coerceAtLeast(0) },
+            { i -> GamehubStore.setCaptureSaturation(ctx, sats[i]) })
+        tvCard.addView(satRow)
     }
 
     private fun buildBoot() {

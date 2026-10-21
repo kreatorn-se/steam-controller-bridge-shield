@@ -228,4 +228,144 @@ class LevelsMathTest {
     fun emptySampleIsNotLimited() {
         assertFalse(LevelsMath.measure(IntArray(256)).limited)
     }
+
+    // ------------------------------------------------------------------ saturation
+
+    /** Reference in doubles: round(Y + (c − Y) × k), clamped. */
+    private fun refSat(argb: Int, pct: Int): Int {
+        val r = (argb shr 16) and 0xFF
+        val g = (argb shr 8) and 0xFF
+        val b = argb and 0xFF
+        val y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        val k = 1 + pct / 100.0
+        fun ch(c: Int) = Math.round(y + (c - y) * k).toInt().coerceIn(0, 255)
+        return (argb and -0x1000000) or (ch(r) shl 16) or (ch(g) shl 8) or ch(b)
+    }
+
+    private fun assertWithinOne(expected: Int, actual: Int, msg: String) {
+        for (sh in intArrayOf(24, 16, 8, 0)) {
+            val e = (expected shr sh) and 0xFF
+            val a = (actual shr sh) and 0xFF
+            assertTrue("$msg: byte@$sh expected $e got $a", kotlin.math.abs(e - a) <= if (sh == 24) 0 else 1)
+        }
+    }
+
+    /** A spread of colours: every channel through 0..255 in coarse steps, plus random-ish ones. */
+    private val palette: IntArray = buildList {
+        for (r in 0..255 step 17) for (g in 0..255 step 17) for (b in 0..255 step 17) add(argb(0xFF, r, g, b))
+        var x = 0x2545F491
+        repeat(2_000) { x = x * 1103515245 + 12345; add(argb(0xFF, (x shr 16) and 0xFF, (x shr 8) and 0xFF, x and 0xFF)) }
+    }.toIntArray()
+
+    @Test
+    fun saturationChoices() {
+        assertEquals(listOf(0, 6, 12, 18, 25), LevelsMath.SATURATION_CHOICES)
+        assertEquals(12, LevelsMath.SATURATION_DEFAULT)
+    }
+
+    @Test
+    fun greyStaysGrey() {
+        for (pct in LevelsMath.SATURATION_CHOICES) for (v in 0..255) {
+            assertEquals("v=$v pct=$pct", grey(v), LevelsMath.saturate(grey(v), pct))
+            val px = intArrayOf(grey(v))
+            LevelsMath.process(px, 1, null, pct)
+            assertEquals("process v=$v pct=$pct", grey(v), px[0])
+        }
+    }
+
+    @Test
+    fun boostZeroIsIdentity() {
+        val px = palette.copyOf()
+        assertEquals(0xFF, LevelsMath.process(px, px.size, null, 0))
+        assertTrue(px.contentEquals(palette))
+        for (c in palette) assertEquals(c, LevelsMath.saturate(c, 0))
+    }
+
+    @Test
+    fun boostMatchesFormulaAroundLuma() {
+        for (pct in listOf(6, 12, 18, 25)) for (c in palette) {
+            assertWithinOne(refSat(c, pct), LevelsMath.saturate(c, pct), "c=${Integer.toHexString(c)} pct=$pct")
+        }
+        // Worked example, k = 1.12: (200, 100, 50) has Y = 0.2126·200 + 0.7152·100 + 0.0722·50 = 117.65
+        // R = 117.65 + 82.35·1.12 = 209.88 -> 210; G = 117.65 − 17.65·1.12 = 97.88 -> 98;
+        // B = 117.65 − 67.65·1.12 = 41.88 -> 42
+        assertEquals(argb(0xFF, 210, 98, 42), LevelsMath.saturate(argb(0xFF, 200, 100, 50), 12))
+    }
+
+    @Test
+    fun boostPushesChannelsAwayFromLumaAndKeepsLuma() {
+        for (c in palette) {
+            val out = LevelsMath.saturate(c, 25)
+            val y = LevelsMath.luma(c)
+            for (sh in intArrayOf(16, 8, 0)) {
+                val a = (c shr sh) and 0xFF
+                val b = (out shr sh) and 0xFF
+                // each channel moves away from luma (or stays, at the clamp / on luma)
+                if (a > y + 1) assertTrue(b >= a)
+                if (a < y - 1) assertTrue(b <= a)
+            }
+            // without clamping, luma is preserved (within rounding)
+            val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val bb = c and 0xFF
+            val yf = 0.2126 * r + 0.7152 * g + 0.0722 * bb
+            val clamps = listOf(r, g, bb).any { val v = yf + (it - yf) * 1.25; v < 0 || v > 255 }
+            if (!clamps) assertTrue(kotlin.math.abs(LevelsMath.luma(out) - y) <= 1)
+        }
+    }
+
+    @Test
+    fun boostClamps() {
+        assertEquals(argb(0xFF, 255, 0, 0), LevelsMath.saturate(argb(0xFF, 255, 0, 0), 25))
+        assertEquals(argb(0xFF, 0, 255, 0), LevelsMath.saturate(argb(0xFF, 0, 255, 0), 25))
+        assertEquals(argb(0xFF, 0, 0, 255), LevelsMath.saturate(argb(0xFF, 0, 0, 255), 25))
+        // 250 with low luma would exceed 255; 5 with high luma would go below 0
+        val hot = LevelsMath.saturate(argb(0xFF, 250, 10, 10), 25)
+        assertEquals(255, (hot shr 16) and 0xFF)
+        val cold = LevelsMath.saturate(argb(0xFF, 5, 250, 250), 25)
+        assertEquals(0, (cold shr 16) and 0xFF)
+        for (pct in LevelsMath.SATURATION_CHOICES) for (c in palette) {
+            val o = LevelsMath.saturate(c, pct)
+            for (sh in intArrayOf(16, 8, 0)) assertTrue(((o shr sh) and 0xFF) in 0..255)
+        }
+    }
+
+    @Test
+    fun boostKeepsAlpha() {
+        val px = intArrayOf(argb(0x80, 200, 100, 50), argb(0x00, 10, 200, 30))
+        assertEquals(0x00, LevelsMath.process(px, 2, null, 12))
+        assertEquals(0x80, px[0] ushr 24)
+        assertEquals(0x00, px[1] ushr 24)
+    }
+
+    @Test
+    fun processWithSaturationMatchesSaturate() {
+        val px = palette.copyOf()
+        LevelsMath.process(px, px.size, null, 18)
+        for (i in palette.indices) assertEquals(LevelsMath.saturate(palette[i], 18), px[i])
+    }
+
+    @Test
+    fun combinedLutAndBoostEqualsSequential() {
+        for (pct in LevelsMath.SATURATION_CHOICES) {
+            val combined = palette.copyOf()
+            LevelsMath.process(combined, combined.size, LevelsMath.EXPAND_LUT, pct)
+            val sequential = palette.copyOf()
+            LevelsMath.applyLut(sequential, sequential.size)
+            for (i in sequential.indices) sequential[i] = LevelsMath.saturate(sequential[i], pct)
+            for (i in palette.indices) assertWithinOne(sequential[i], combined[i], "c=${Integer.toHexString(palette[i])} pct=$pct")
+            // and against the double-precision reference of LUT then boost
+            for (i in palette.indices) {
+                val lv = intArrayOf(palette[i]).also { LevelsMath.applyLut(it, 1) }[0]
+                assertWithinOne(refSat(lv, pct), combined[i], "ref c=${Integer.toHexString(palette[i])} pct=$pct")
+            }
+        }
+    }
+
+    @Test
+    fun processWithLutOnlyEqualsApplyLut() {
+        val a = palette.copyOf()
+        val b = palette.copyOf()
+        LevelsMath.process(a, a.size, LevelsMath.EXPAND_LUT, 0)
+        LevelsMath.applyLut(b, b.size)
+        assertTrue(a.contentEquals(b))
+    }
 }

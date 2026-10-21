@@ -162,7 +162,7 @@ object GamehubSync {
 
     private fun uploadPending(ctx: Context, client: GamehubClient) {
         // Captures whose level fix was cut short by a process kill go back through it first.
-        CaptureStore.dir(ctx)?.let { d -> CaptureLevels.resumeOrphans(d) { ok -> if (ok) kick(ctx) } }
+        CaptureStore.dir(ctx)?.let { d -> CaptureLevels.resumeOrphans(d, GamehubStore.captureSaturation(ctx)) { ok -> if (ok) kick(ctx) } }
         for (p in CaptureStore.pending(ctx).take(UPLOADS_PER_TICK)) {
             // screencap may still be writing: leave files younger than two seconds for next tick.
             if (System.currentTimeMillis() - p.png.lastModified() < 2_000) continue
