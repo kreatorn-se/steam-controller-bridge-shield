@@ -2,6 +2,8 @@
 <resources>
     <!-- ui/tv/Img: the image a view is bound to, so a late result never lands on a re-bound view. -->
     <item name="img_key" type="id" />
+    <!-- ui/tv/Img: the pending sharper-copy job of a view, cancelled when the view is re-bound. -->
+    <item name="img_upgrade" type="id" />
     <!-- ui/Unclip: a scrolling container already given room for focus growth. -->
     <item name="unclip_room" type="id" />
     <!-- ui/tv/Hold: what a long press on this view acts on (a HoldItem). -->

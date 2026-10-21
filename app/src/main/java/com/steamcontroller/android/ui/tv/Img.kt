@@ -98,6 +98,18 @@ object Img {
         threads("img-full", Process.THREAD_PRIORITY_DEFAULT)).apply { allowCoreThreadTimeOut(true) }
     private val prefetchPool: ExecutorService = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, LinkedBlockingDeque(),
         threads("img-prefetch", Process.THREAD_PRIORITY_BACKGROUND)).apply { allowCoreThreadTimeOut(true) }
+    /**
+     * Sharper copies for thumbnails whose preview is too small ([upgrade]): their own background
+     * thread, newest first, at most [UPGRADE_QUEUE] waiting (the oldest is dropped), so they never
+     * queue in front of show mode's originals.
+     */
+    private val upgradePool: ExecutorService = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, object : LinkedBlockingDeque<Runnable>(UPGRADE_QUEUE) {
+        override fun offer(e: Runnable): Boolean {
+            if (offerFirst(e)) return true
+            pollLast()
+            return offerFirst(e)
+        }
+    }, threads("img-up", Process.THREAD_PRIORITY_BACKGROUND)).apply { allowCoreThreadTimeOut(true) }
     private val trimmer: ExecutorService = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, LinkedBlockingDeque(),
         threads("img-trim", Process.THREAD_PRIORITY_BACKGROUND)).apply { allowCoreThreadTimeOut(true) }
 
@@ -105,6 +117,11 @@ object Img {
     private const val PREVIEW_TARGET = 260L * 1024 * 1024
     private const val FULL_MAX = 200L * 1024 * 1024
     private const val FULL_TARGET = 150L * 1024 * 1024
+    /** Originals fetched only to sharpen thumbnails: a cache of their own, so they never push out slideshow originals. */
+    private const val UP_MAX = 80L * 1024 * 1024
+    private const val UP_TARGET = 60L * 1024 * 1024
+    private const val UP_DIR = "img-up"
+    private const val UPGRADE_QUEUE = 8
     private const val RETRY_MS = 15_000L
 
     /**
@@ -137,6 +154,7 @@ object Img {
     fun screenWidth(c: Context): Int = c.resources.displayMetrics.widthPixels
 
     private fun dir(original: Boolean) = File(app.cacheDir, if (original) "img-full" else PREVIEW_DIR).apply { mkdirs() }
+    private fun upDir() = File(app.cacheDir, UP_DIR).apply { mkdirs() }
     private fun diskFile(url: String, original: Boolean) = File(dir(original), GamehubTv.sha1(GamehubTv.abs(app, url)))
 
     fun cached(url: String, spec: Spec): Bitmap? = if (::mem.isInitialized) mem.get(spec.key(url)) else null
@@ -208,6 +226,7 @@ object Img {
      */
     fun into(iv: ImageView, url: String?, spec: Spec, fade: Boolean = true, urgent: Boolean = false, full: String? = null, onDone: ((Bitmap?) -> Unit)? = null) {
         if (url == null) {
+            (iv.getTag(R.id.img_upgrade) as? Upgrade)?.cancelled = true
             iv.setTag(R.id.img_key, null)
             iv.setImageDrawable(null)
             onDone?.invoke(null)
@@ -218,6 +237,7 @@ object Img {
             onDone?.invoke((iv.drawable as? BitmapDrawable)?.bitmap)
             return
         }
+        (iv.getTag(R.id.img_upgrade) as? Upgrade)?.let { if (it.key != key) it.cancelled = true }
         iv.setTag(R.id.img_key, key)
         val fullSpec = spec.copy(original = true)
         val hit = (if (full != null && full != url) mem.get(fullSpec.key(full)) else null) ?: mem.get(key)
@@ -241,16 +261,42 @@ object Img {
         }
     }
 
-    /** [shown] is smaller than [spec] needs: decode [full] at that size and swap it in. */
+    /** One sharper-copy job; [cancelled] once its view is bound to something else. */
+    private class Upgrade(val key: String) { @Volatile var cancelled = false }
+
+    /** The preview's pixel width from the hub's `?v=<width>`, when the URL carries it. */
+    internal fun previewWidth(url: String): Int? =
+        Regex("""[?&]v=(\d{1,6})(?:&|$)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
+
+    /**
+     * [shown] is smaller than [spec] needs and the hub does not say its preview is big enough:
+     * decode [full] at that size on [upgradePool] (into its own disk cache) and swap it in, unless
+     * the view was re-bound before the job started or finished.
+     */
     private fun upgrade(iv: ImageView, key: String, shown: Bitmap, spec: Spec, full: String?, url: String) {
         if (full == null || full == url || !tooSmall(shown.width, shown.height, spec)) return
-        load(full, spec.copy(original = true)) { b ->
-            if (b != null && b.width > shown.width && iv.getTag(R.id.img_key) == key) iv.setImageBitmap(b)
+        val v = previewWidth(url)
+        if (v != null && !tooSmall(v, Int.MAX_VALUE, spec.copy(h = 0))) return
+        val fullKey = spec.copy(original = true).key(full)
+        mem.get(fullKey)?.let { b -> if (b.width > shown.width && iv.getTag(R.id.img_key) == key) iv.setImageBitmap(b); return }
+        (iv.getTag(R.id.img_upgrade) as? Upgrade)?.cancelled = true
+        val job = Upgrade(key)
+        iv.setTag(R.id.img_upgrade, job)
+        upgradePool.execute {
+            if (job.cancelled) return@execute
+            val b = try { ensureIn(full, upDir())?.let { f -> decode(f, spec) } } catch (_: Throwable) { null }
+            maybeTrim()
+            main.post {
+                if (b == null) return@post
+                mem.put(fullKey, b)
+                if (!job.cancelled && iv.getTag(R.id.img_key) == key && b.width > shown.width) iv.setImageBitmap(b)
+            }
         }
     }
 
     /** Drops what [iv] shows so the bitmap can be freed; [into] binds it again later. */
     fun release(iv: ImageView) {
+        (iv.getTag(R.id.img_upgrade) as? Upgrade)?.cancelled = true
         iv.animate().cancel()
         iv.setTag(R.id.img_key, null)
         iv.setImageDrawable(null)
@@ -258,8 +304,10 @@ object Img {
 
     // ── worker side ───────────────────────────────────────────────────────────────────
 
-    private fun ensureOnDisk(url: String, original: Boolean): File? {
-        val f = diskFile(url, original)
+    private fun ensureOnDisk(url: String, original: Boolean): File? = ensureIn(url, dir(original))
+
+    private fun ensureIn(url: String, d: File): File? {
+        val f = File(d, GamehubTv.sha1(GamehubTv.abs(app, url)))
         synchronized(stripes[(f.name.hashCode() and 0x7FFFFFFF) % stripes.size]) {
             if (f.isFile && f.length() > 0) {
                 f.setLastModified(System.currentTimeMillis())
@@ -327,6 +375,7 @@ object Img {
         trimmer.execute {
             trimDir(dir(false), PREVIEW_MAX, PREVIEW_TARGET)
             trimDir(dir(true), FULL_MAX, FULL_TARGET)
+            trimDir(upDir(), UP_MAX, UP_TARGET)
         }
     }
 
@@ -371,7 +420,7 @@ object Img {
         mem.evictAll()
         failedAt.clear()
         trimmer.execute {
-            for (d in listOf(dir(false), dir(true))) try { d.listFiles()?.forEach { it.delete() } } catch (_: Throwable) {}
+            for (d in listOf(dir(false), dir(true), upDir())) try { d.listFiles()?.forEach { it.delete() } } catch (_: Throwable) {}
         }
     }
 }
