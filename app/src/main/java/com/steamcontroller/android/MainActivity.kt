@@ -57,7 +57,8 @@ import com.steamcontroller.android.ui.tv.HoldItem
 import com.steamcontroller.android.ui.tv.HomePage
 import com.steamcontroller.android.ui.tv.HomeRepo
 import com.steamcontroller.android.ui.tv.Img
-import com.steamcontroller.android.ui.tv.InboxPage
+import com.steamcontroller.android.ui.tv.ImportPage
+import com.steamcontroller.android.ui.tv.ImportStatus
 import com.steamcontroller.android.ui.tv.LibraryPage
 import com.steamcontroller.android.ui.tv.CollRef
 import com.steamcontroller.android.ui.tv.ShowMode
@@ -66,7 +67,7 @@ import com.steamcontroller.android.ui.tv.Splash
 
 /**
  * The app shell: navigation rail, status strip and one page at a time. Gamehub's sections (Home,
- * Library, Inbox) on top, the controller bridge (Controller, Test, Tuning, Profiles, Device) and
+ * Library, Import) on top, the controller bridge (Controller, Test, Tuning, Profiles, Device) and
  * the hub link under Settings. Single activity so the live state, focus memory, side sheets and
  * show mode are shared; Calibration, the HID debug screen and the app picker remain their own
  * activities.
@@ -110,6 +111,8 @@ class MainActivity : AppCompatActivity(), Host {
     private lateinit var hubChip: StripChip
     private lateinit var nowChip: StripChip
     private lateinit var updateChip: StripChip
+    private lateinit var importChip: StripChip
+    private val importListener: (GamehubTv.ImportProgress?) -> Unit = { renderImporting(it) }
     private val updateBar by lazy { com.steamcontroller.android.ui.tv.Bar(this) }
     private val updateListener: (com.steamcontroller.android.update.Updater.State) -> Unit = { renderUpdate(it) }
     private var nowGame: String? = null
@@ -235,6 +238,8 @@ class MainActivity : AppCompatActivity(), Host {
         super.onCreate(savedInstanceState)
         com.steamcontroller.android.ui.tv.HomeTiming.mark("activity-create")
         WindowCompat.setDecorFitsSystemWindows(window, true)
+        // Show-mode settings are read on the main thread later: load their file off it now.
+        Thread({ try { com.steamcontroller.android.ui.tv.TvPrefs.slowZoom(applicationContext) } catch (_: Throwable) {} }, "tv-prefs").start()
         Img.init(this)
         HomeRepo.install()
         svc = ServiceControl(this) { ticker.invalidateSlow() }
@@ -248,6 +253,7 @@ class MainActivity : AppCompatActivity(), Host {
         val start = savedInstanceState?.getString(KEY_PAGE)?.let { runCatching { PageId.valueOf(it) }.getOrNull() } ?: PageId.HOME
         go(start)
         HomeRepo.observe(this, homeListener)
+        ImportStatus.observe(importListener)
         com.steamcontroller.android.hub.Background.start(this, "app")
         com.steamcontroller.android.update.Updater.observe(updateListener)
         com.steamcontroller.android.update.Updater.checkIfDue(this)
@@ -273,6 +279,7 @@ class MainActivity : AppCompatActivity(), Host {
         pages[current]?.let { it.refresh(); it.onShow() }
         statusSeen = -1
         HomeRepo.start(this)
+        ImportStatus.start(this)
         lastInput = android.os.SystemClock.uptimeMillis()
         idleHandler.removeCallbacks(idleCheck)
         idleHandler.postDelayed(idleCheck, 20_000L)
@@ -281,6 +288,7 @@ class MainActivity : AppCompatActivity(), Host {
     override fun onPause() {
         idleHandler.removeCallbacks(idleCheck)
         HomeRepo.stop()
+        ImportStatus.stop()
         show?.pause()
         pages[current]?.onHide()
         ticker.stop()
@@ -320,6 +328,7 @@ class MainActivity : AppCompatActivity(), Host {
 
     override fun onDestroy() {
         HomeRepo.remove(homeListener)
+        ImportStatus.remove(importListener)
         com.steamcontroller.android.update.Updater.remove(updateListener)
         com.steamcontroller.android.hub.Background.stop("app")
         service.unregister()
@@ -418,7 +427,13 @@ class MainActivity : AppCompatActivity(), Host {
             updateBar.visibility = View.GONE
             c.setOnClickListener { startUpdate() }
         }
-        for (c in listOf(updateChip, nowChip, linkChip, profileChip, serviceChip, hubChip)) chips.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
+        importChip = StripChip(true).also { c ->
+            c.dot.color = C.accent
+            c.dot.halo = true
+            c.visibility = View.GONE
+            c.setOnClickListener { go(PageId.IMPORT, focusContent = true) }
+        }
+        for (c in listOf(updateChip, importChip, nowChip, linkChip, profileChip, serviceChip, hubChip)) chips.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) })
         val scroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
@@ -516,6 +531,17 @@ class MainActivity : AppCompatActivity(), Host {
         else -> getString(R.string.update_download_failed)
     }
 
+    /** "Importing 120/857" while the hub imports screenshots (/now's importing), off the Import page. */
+    private fun renderImporting(p: GamehubTv.ImportProgress?) {
+        if (p == null || !p.running || cur == PageId.IMPORT) {
+            if (importChip.hasFocus()) linkChip.requestFocus()
+            importChip.visibility = View.GONE
+            return
+        }
+        importChip.label.text = getString(R.string.strip_importing, p.done, p.total)
+        importChip.visibility = View.VISIBLE
+    }
+
     /** The compact Now-playing chip: Steam presence via the hub's home. */
     private fun renderNow(s: HomeRepo.State) {
         val np = (s as? HomeRepo.State.Ready)?.home?.nowPlaying
@@ -572,7 +598,7 @@ class MainActivity : AppCompatActivity(), Host {
             PageId.GAMEHUB -> GamehubPage(this)
             PageId.HOME -> HomePage(this)
             PageId.LIBRARY -> LibraryPage(this)
-            PageId.INBOX -> InboxPage(this)
+            PageId.IMPORT -> ImportPage(this)
         }
     }
 
@@ -590,6 +616,7 @@ class MainActivity : AppCompatActivity(), Host {
             title.text = if (id == PageId.HOME) "" else id.title
             rail.setCurrent(id)
             renderNow(HomeRepo.state)
+            renderImporting(ImportStatus.progress)
             p.refresh()
             if (resumed) p.onShow()
         }

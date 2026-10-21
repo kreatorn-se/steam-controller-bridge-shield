@@ -34,7 +34,7 @@ import com.steamcontroller.android.ui.widget.setOnFocusChangeListenerChained
 enum class PageId(val title: String, val icon: Int, val settings: Boolean) {
     HOME("Home", R.drawable.ic_nav_home, false),
     LIBRARY("Library", R.drawable.ic_nav_library, false),
-    INBOX("Inbox", R.drawable.ic_nav_inbox, false),
+    IMPORT("Import", R.drawable.ic_nav_import, false),
     CONTROLLER("Controller", R.drawable.ic_nav_controller, true),
     TEST("Test", R.drawable.ic_nav_test, true),
     TUNING("Tuning", R.drawable.ic_nav_tuning, true),
@@ -136,7 +136,7 @@ open class FocusMemoryFrame(ctx: Context) : FrameLayout(ctx) {
 
 /**
  * Left navigation rail: icons when idle, icon + caps label while it holds focus (an overlay, so the
- * page does not reflow). HOME, LIBRARY and INBOX on top; below them SETTINGS, a single gear while
+ * page does not reflow). HOME, LIBRARY and IMPORT on top; below them SETTINGS, a single gear while
  * you are in Gamehub and the six bridge pages while you are in one of them. Pages switch on
  * select; the current one carries an accent bar.
  */
