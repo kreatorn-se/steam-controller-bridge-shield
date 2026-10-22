@@ -255,8 +255,8 @@ class RadialView(context: Context) : View(context) {
         // Icons and labels on the middle of each slice's band.
         val mid = (r + rd) / 2f
         val arcLen = (Math.PI * 2 * mid / n).toFloat()
-        val iconSize = min(44f * d, min(arcLen * 0.52f, (r - rd) * 0.5f))
-        val labelSp = if (n <= 8) 11.5f else 10f
+        val iconSize = min(28f * d, min(arcLen * 0.52f, (r - rd) * 0.5f))
+        val labelSp = if (n <= 8) 7.5f else 6.5f
         label.textSize = labelSp * d
         for (i in 0 until n) {
             val s = m.slices[i]
@@ -268,14 +268,14 @@ class RadialView(context: Context) : View(context) {
             val bmp = RadialIcons.bitmap(s.icon)
             val text = fit(s.label.uppercase(), arcLen * 0.95f)
             if (bmp != null) {
-                val top = py - (iconSize + (if (text.isNotEmpty()) 6f * d + label.textSize else 0f)) / 2f
+                val top = py - (iconSize + (if (text.isNotEmpty()) 4f * d + label.textSize else 0f)) / 2f
                 dst.set(px - iconSize / 2f, top, px + iconSize / 2f, top + iconSize)
                 iconPaint.colorFilter = PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_IN)
                 iconPaint.alpha = if (on) 255 else 225
                 c.drawBitmap(bmp, null, dst, iconPaint)
                 if (text.isNotEmpty()) {
                     label.color = if (on) TEXT else TEXT2
-                    c.drawText(text, px, dst.bottom + 6f * d + label.textSize * 0.8f, label)
+                    c.drawText(text, px, dst.bottom + 4f * d + label.textSize * 0.8f, label)
                 }
             } else {
                 label.color = if (on) TEXT else 0xFFC9CED6.toInt()
@@ -289,11 +289,11 @@ class RadialView(context: Context) : View(context) {
         c.drawCircle(cx, cy, rd, hub)
         c.drawCircle(cx, cy, rd, hubRing)
         if (h in 0 until n) {
-            centre.textSize = 15f * d
+            centre.textSize = 9.5f * d
             centre.color = TEXT
             c.drawText(fit(m.slices[h].label.uppercase(), rd * 1.7f, centre), cx, cy + centre.textSize * 0.35f, centre)
         } else {
-            centre.textSize = 10.5f * d
+            centre.textSize = 7f * d
             centre.color = if (test) WARN else TEXT3
             c.drawText(if (test) "TEST" else "•", cx, cy + centre.textSize * 0.35f, centre)
         }
