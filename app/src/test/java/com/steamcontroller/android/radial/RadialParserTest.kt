@@ -160,9 +160,9 @@ class RadialParserTest {
         val none = RadialParser.resolve(null, defaults).config
         assertEquals(3, none.left!!.slices.size)
         assertEquals(5, none.right!!.slices.size)
-        // A profile with its own radial: only that, no per-pad fallback.
+        // A profile with its own radial: a pad it doesn't mention uses the default for that pad.
         val own = RadialParser.resolve("""{"right":${menu(4)}}""", defaults).config
-        assertNull(own.left)
+        assertEquals(3, own.left!!.slices.size)
         assertEquals(4, own.right!!.slices.size)
         // An explicit null pad means no menu on that pad.
         val off = RadialParser.resolve("""{"left":null,"right":${menu(2)}}""", defaults).config
