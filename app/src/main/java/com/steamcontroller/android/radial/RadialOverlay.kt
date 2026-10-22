@@ -309,7 +309,7 @@ class RadialView(context: Context) : View(context) {
     private fun withAlpha(c: Int, a: Int) = (c and 0x00FFFFFF) or (a shl 24)
 
     companion object {
-        const val SIZE_DP = 360f
+        const val SIZE_DP = 220f
         const val ACCENT = 0xFF1A9FFF.toInt()
         const val TEXT = 0xFFF2F4F7.toInt()
         const val TEXT2 = 0xFF8B929C.toInt()
