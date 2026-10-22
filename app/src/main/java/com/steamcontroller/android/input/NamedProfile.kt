@@ -162,11 +162,7 @@ data class NamedProfile(
             KEY_L_OUTER, KEY_R_OUTER, KEY_L_CURVE, KEY_R_CURVE, KEY_PAD_ACCEL, KEY_STEAM_APPS, KEY_RADIAL,
         )
 
-        private fun extras(obj: JSONObject): String? {
-            val x = JSONObject()
-            obj.keys().forEach { k -> if (k !in KNOWN) x.put(k, obj.get(k)) }
-            return if (x.length() == 0) null else x.toString()
-        }
+        private fun extras(obj: JSONObject): String? = com.steamcontroller.android.backup.ConfigExtras.unknown(obj, KNOWN)
 
         fun clampOuter(v: Int): Int = v.coerceIn(70, 100)
         fun clampCurve(v: Float): Float = if (v.isNaN()) 1f else v.coerceIn(0.5f, 3f)

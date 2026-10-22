@@ -131,4 +131,53 @@ class RadialParserTest {
         // A profile without menus stays without the key.
         assertTrue(!NamedProfile.fromJson(JSONObject("""{"id":"p2","name":"x"}""")).toJson().has("radial"))
     }
+
+    // ── contract v1.1 amendments ─────────────────────────────────────────────────────
+
+    @Test fun amendment1_sliceZeroCentredOnTwelve() {
+        // 4 slices: 0 covers 315°..45°, so straight up and 44° right are both slice 0.
+        assertEquals(0, RadialMath.sliceAt(0f, 4, 0f))
+        assertEquals(0, RadialMath.sliceAt(44f, 4, 0f))
+        assertEquals(0, RadialMath.sliceAt(316f, 4, 0f))
+        assertEquals(1, RadialMath.sliceAt(46f, 4, 0f))
+        // slice i centred at rotation + i·360/n
+        for (n in 2..12) for (i in 0 until n) assertEquals(i, RadialMath.sliceAt(RadialMath.centre(i, n, 30f), n, 30f))
+    }
+
+    @Test fun amendment2_macroDurationIsWaitsPlus60PerTap() {
+        val steps = listOf(Step.Wait(100), Step.Button(PadButton.A, StepAct.TAP), Step.Keys(listOf(4), StepAct.TAP),
+            Step.Button(PadButton.B, StepAct.DOWN), Step.Button(PadButton.B, StepAct.UP))
+        assertEquals(100L + 60 + 60, MacroPlan.durationMs(steps))
+        fun ok(s: String) = RadialParser.parse("""{"left":{"slices":[{"id":"a","label":"a","action":{"type":"macro","steps":[$s]}},{"id":"b","label":"b","action":{"type":"button","button":"A"}}]}}""").config.left != null
+        assertTrue(ok("""{"wait":4970},{"wait":4970},{"button":"A","act":"tap"}""")) // 10 000
+        assertTrue(!ok("""{"wait":4971},{"wait":4970},{"button":"A","act":"tap"}""")) // 10 001
+        assertTrue(ok("""{"wait":5000},{"wait":5000},{"button":"A","act":"down"},{"button":"A","act":"up"}""")) // down/up count 0
+    }
+
+    @Test fun amendment4_defaultMenus() {
+        val defaults = """{"left":${menu(3)},"right":${menu(5)}}"""
+        // No game profile, or a profile without a radial key: the defaults.
+        val none = RadialParser.resolve(null, defaults).config
+        assertEquals(3, none.left!!.slices.size)
+        assertEquals(5, none.right!!.slices.size)
+        // A profile with its own radial: only that, no per-pad fallback.
+        val own = RadialParser.resolve("""{"right":${menu(4)}}""", defaults).config
+        assertNull(own.left)
+        assertEquals(4, own.right!!.slices.size)
+        // An explicit null pad means no menu on that pad.
+        val off = RadialParser.resolve("""{"left":null,"right":${menu(2)}}""", defaults).config
+        assertNull(off.left)
+        assertEquals(2, off.right!!.slices.size)
+        // No defaults either: nothing.
+        assertTrue(RadialParser.resolve(null, null).config.isEmpty)
+        // Problems in the defaults are labelled as such.
+        assertTrue(RadialParser.resolve(null, """{"left":${menu(1)}}""").problems.single().startsWith("defaults: "))
+    }
+
+    @Test fun amendment3_profileWithoutRadialKeyStaysDistinguishable() {
+        val p = NamedProfile.fromJson(JSONObject("""{"id":"p","name":"x","radial":{"left":null}}"""))
+        assertEquals("{\"left\":null}", p.radialJson)
+        assertTrue(p.toJson().getJSONObject("radial").isNull("left"))
+        assertNull(NamedProfile.fromJson(JSONObject("""{"id":"q","name":"y"}""")).radialJson)
+    }
 }

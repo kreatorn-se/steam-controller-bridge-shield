@@ -83,6 +83,9 @@ object BackupManager {
             )
         }
 
+        // Keys a newer hub added to liveSettings (e.g. the default radial menus) go back unchanged.
+        ConfigExtras.merge(live, ConfigExtras.live(context))
+
         val profiles = JSONArray().apply {
             Prefs.listNamedProfiles(context).forEach { put(it.toJson()) }
         }
@@ -93,12 +96,21 @@ object BackupManager {
             put("liveSettings", live)
             put("namedProfiles", profiles)
             put("activeNamedProfileId", Prefs.getActiveNamedProfileId(context))
+            ConfigExtras.merge(this, ConfigExtras.root(context))
         }.toString(2)
     }
 
     /** Returns the number of Game Profiles restored, or throws on malformed JSON. */
     fun import(context: Context, json: String): Int {
         val root = JSONObject(json)
+        // Unknown keys (top level and liveSettings) are kept verbatim for the next export.
+        val liveIn = root.optJSONObject("liveSettings")
+        ConfigExtras.save(
+            context,
+            ConfigExtras.unknown(root, ConfigExtras.ROOT_KNOWN),
+            liveIn?.let { ConfigExtras.unknown(it, ConfigExtras.LIVE_KNOWN) },
+            hasLive = liveIn != null,
+        )
 
         root.optJSONObject("liveSettings")?.let { live ->
             live.optInt("gamepadProfileId", -1).takeIf { it >= 0 }?.let {

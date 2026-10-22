@@ -91,7 +91,13 @@ object Radial {
     fun active(context: Context): Pair<String?, ParsedRadial> {
         val id = Prefs.getActiveNamedProfileId(context)
         val p = id?.let { pid -> Prefs.listNamedProfiles(context).firstOrNull { it.id == pid } }
-        return p?.name to RadialParser.parse(p?.radialJson)
+        val parsed = RadialParser.resolve(p?.radialJson, com.steamcontroller.android.backup.ConfigExtras.defaultRadial(context))
+        val label = when {
+            p == null -> null
+            p.radialJson == null && !parsed.config.isEmpty -> "${p.name} (default menus)"
+            else -> p.name
+        }
+        return (label ?: if (parsed.config.isEmpty) null else "Default menus") to parsed
     }
 
     /** Re-read the active profile's menus (profile switch, hub sync), off the calling thread. */
