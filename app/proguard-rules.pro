@@ -14,3 +14,7 @@
 # Test-only classes some of dadb's transitive artifacts reference.
 -dontwarn org.junit.**
 -dontwarn org.graalvm.**
+
+# AndroidSVG (radial-menu icons): small, keep it whole rather than audit its parser for R8.
+-keep class com.caverock.androidsvg.** { *; }
+-dontwarn com.caverock.androidsvg.**

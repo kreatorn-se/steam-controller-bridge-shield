@@ -615,6 +615,9 @@ object Prefs {
             rightCurve = getStickCurve(context, false),
             padAccel = getPadAcceleration(context),
             steamAppIds = existing?.steamAppIds ?: emptyList(),
+            // Edited on the web only: saving the live settings over a profile keeps its menus.
+            radialJson = existing?.radialJson,
+            extrasJson = existing?.extrasJson,
         )
     }
 

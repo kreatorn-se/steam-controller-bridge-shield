@@ -6,6 +6,7 @@
 #define LOG_TAG "virtual_input"
 #include "output_backend.h"
 #include "hid_common.h"
+#include "radial_keyboard.h"
 
 #include <jni.h>
 #include <mutex>
@@ -163,6 +164,7 @@ Java_com_steamcontroller_android_uinput_UInputNative_pollFFEvent(JNIEnv* env, jc
     int32_t weak = 0;
     {
         std::lock_guard<std::mutex> lock(g_lock);
+        radial_kbd::drain();
         if (g_backend == nullptr) return nullptr;
         if (!g_backend->pollForceFeedback(&strong, &weak)) return nullptr;
     }
@@ -177,8 +179,38 @@ Java_com_steamcontroller_android_uinput_UInputNative_pollFFEvent(JNIEnv* env, jc
 extern "C" JNIEXPORT void JNICALL
 Java_com_steamcontroller_android_uinput_UInputNative_destroy(JNIEnv*, jclass) {
     std::lock_guard<std::mutex> lock(g_lock);
+    radial_kbd::destroy();
     if (g_backend == nullptr) return;
     g_backend->destroyDevices();
     g_created_profile = -1;
     LOGI("Virtual devices destroyed (%s)", g_backend->name());
+}
+
+// ── Radial-menu keyboard (radial_keyboard.h) ────────────────────────────────
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_steamcontroller_android_uinput_UInputNative_createKeyboard(JNIEnv*, jclass) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    return radial_kbd::create() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_steamcontroller_android_uinput_UInputNative_sendKeyboard(JNIEnv* env, jclass, jint modifiers, jintArray keys) {
+    uint8_t usages[6] = {};
+    int count = 0;
+    if (keys != nullptr) {
+        const jsize n = env->GetArrayLength(keys);
+        jint values[6] = {};
+        count = n < 6 ? (int)n : 6;
+        env->GetIntArrayRegion(keys, 0, count, values);
+        for (int i = 0; i < count; i++) usages[i] = (uint8_t)(values[i] & 0xFF);
+    }
+    std::lock_guard<std::mutex> lock(g_lock);
+    return radial_kbd::send((uint8_t)(modifiers & 0xFF), usages, count) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_steamcontroller_android_uinput_UInputNative_destroyKeyboard(JNIEnv*, jclass) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    radial_kbd::destroy();
 }

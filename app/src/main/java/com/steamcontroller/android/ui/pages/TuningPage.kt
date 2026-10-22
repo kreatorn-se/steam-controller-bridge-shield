@@ -13,6 +13,8 @@ import com.steamcontroller.android.R
 import com.steamcontroller.android.input.GyroActivation
 import com.steamcontroller.android.input.GyroAim
 import com.steamcontroller.android.parser.Buttons
+import com.steamcontroller.android.radial.Radial
+import com.steamcontroller.android.radial.RadialDescribe
 import com.steamcontroller.android.ui.Host
 import com.steamcontroller.android.ui.Page
 import com.steamcontroller.android.ui.live.LiveFrame
@@ -105,6 +107,8 @@ class TuningPage(host: Host) : Page(host) {
     }
 
     override fun onHide() {
+        // Test mode is only for while this page is open.
+        if (Radial.isTestMode) Radial.setTestMode(false)
         calibrator = null
         calibrateRow?.setTitle(ctx.getString(R.string.calib_gyro_calibrate))
     }
@@ -180,6 +184,43 @@ class TuningPage(host: Host) : Page(host) {
             { if (it < 0.05f) "Off" else "%.1f".format(it) }, { Prefs.getPadAcceleration(ctx) }, { Prefs.setPadAcceleration(ctx, it) }) { updatePreview() })
         add(ToggleRow(ctx, ctx.getString(R.string.calib_trackpad_switch_label), ctx.getString(R.string.calib_trackpad_hint),
             { Prefs.getTrackpadAsMouseInGamepad(ctx) }, { Prefs.setTrackpadAsMouseInGamepad(ctx, it) }))
+        radialRows()
+    }
+
+    /** Radial menus: the active profile's, read-only (edited on Gamehub), and a test mode. */
+    private fun radialRows() {
+        rowsBox.addView(Kit.section(ctx, ctx.getString(R.string.radial_section), 18))
+        val (name, parsed) = Radial.active(ctx)
+        val summary = if (parsed.config.isEmpty) ctx.getString(R.string.radial_none) else RadialDescribe.summary(parsed.config)
+        add(ActionRow(ctx, ctx.getString(R.string.radial_title), ctx.getString(R.string.radial_hint), summary) { showRadial() })
+        add(ToggleRow(ctx, ctx.getString(R.string.radial_test), ctx.getString(R.string.radial_test_hint),
+            { Radial.isTestMode }, { on ->
+                Radial.setTestMode(on)
+                if (on && !Radial.isRunning) Pill.show(ctx, Pill.Kind.INFO, ctx.getString(R.string.tune_needs_controller))
+            }))
+        if (name != null && parsed.problems.isNotEmpty()) {
+            rowsBox.addView(Kit.body(ctx, parsed.problems.joinToString("\n"), 12.5f, C.warning), Kit.lp(t = 6, l = 4, ctx = ctx))
+        }
+    }
+
+    private fun showRadial() {
+        val (name, parsed) = Radial.active(ctx)
+        val c = parsed.config
+        val body = buildString {
+            append(ctx.getString(R.string.radial_profile, name ?: ctx.getString(R.string.radial_no_profile)))
+            for (left in listOf(true, false)) {
+                append("\n\n").append(ctx.getString(if (left) R.string.radial_left else R.string.radial_right)).append('\n')
+                val m = c.menu(left)
+                append(if (m == null) ctx.getString(R.string.radial_off) else RadialDescribe.menu(m))
+            }
+            if (parsed.problems.isNotEmpty()) append("\n\n").append(parsed.problems.joinToString("\n"))
+            append("\n\n").append(ctx.getString(R.string.radial_edit_on_hub))
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.radial_title)
+            .setMessage(body)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     private fun gyroTab() {

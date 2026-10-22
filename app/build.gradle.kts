@@ -36,8 +36,8 @@ android {
         applicationId = "io.github.lluppi.steamcontrollerbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.4.6"
+        versionCode = 13
+        versionName = "1.5.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -143,6 +143,10 @@ dependencies {
         exclude(group = "junit")
         exclude(group = "org.graalvm.buildtools")
     }
+    // Radial-menu slice icons (game-icons.net SVGs from the hub) rendered as vectors. Apache-2.0.
+    implementation("com.caverock:androidsvg-aar:1.4")
     // Plain JVM tests for pure logic (key sequences); never part of the APK.
     testImplementation(libs.junit)
+    // Android's org.json is a stub on the JVM; the radial parser tests need the real one.
+    testImplementation("org.json:json:20240303")
 }

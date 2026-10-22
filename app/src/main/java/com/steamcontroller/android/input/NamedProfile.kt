@@ -60,6 +60,16 @@ data class NamedProfile(
      * one of them is running (hub/SteamSwitch). Replaces app bindings on the Shield.
      */
     val steamAppIds: List<Long> = emptyList(),
+    /**
+     * Radial menus (JSON `radial`, contracts/radial-v1.md), kept verbatim as the hub wrote them:
+     * edited on the web only, parsed and validated by radial/RadialParser when applied.
+     */
+    val radialJson: String? = null,
+    /**
+     * Keys this version does not know, kept verbatim so a newer hub's settings survive the
+     * Shield's round trip (export → sync) instead of being dropped.
+     */
+    val extrasJson: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put(KEY_ID, id)
@@ -97,6 +107,13 @@ data class NamedProfile(
         put(KEY_R_CURVE, rightCurve.toDouble())
         put(KEY_PAD_ACCEL, padAccel.toDouble())
         if (steamAppIds.isNotEmpty()) put(KEY_STEAM_APPS, JSONArray(steamAppIds))
+        radialJson?.let { r -> try { put(KEY_RADIAL, JSONObject(r)) } catch (_: Exception) {} }
+        extrasJson?.let { e ->
+            try {
+                val x = JSONObject(e)
+                x.keys().forEach { k -> if (!has(k)) put(k, x.get(k)) }
+            } catch (_: Exception) {}
+        }
     }
 
     companion object {
@@ -135,6 +152,21 @@ data class NamedProfile(
         const val KEY_R_CURVE = "rCurve"
         const val KEY_PAD_ACCEL = "padAccel"
         const val KEY_STEAM_APPS = "steamAppIds"
+        const val KEY_RADIAL = "radial"
+
+        private val KNOWN = setOf(
+            KEY_ID, KEY_NAME, KEY_PROFILE_ID, KEY_TRANSPORT, KEY_LCX, KEY_LCY, KEY_LDZ, KEY_LIY, KEY_RCX, KEY_RCY,
+            KEY_RDZ, KEY_RIY, KEY_MS, KEY_TAM, KEY_RI, KEY_MAPPING, KEY_DESKTOP_MAPPING, KEY_ACTION_LAYER,
+            KEY_GYRO_ENABLED, KEY_GYRO_ACTIVATION, KEY_GYRO_SENS_X, KEY_GYRO_SENS_Y, KEY_GYRO_SMOOTHING,
+            KEY_GYRO_DEADZONE, KEY_GYRO_RESPONSE, KEY_GYRO_INVERT_Y, KEY_GYRO_BIAS_X, KEY_GYRO_BIAS_Y, KEY_BOUND,
+            KEY_L_OUTER, KEY_R_OUTER, KEY_L_CURVE, KEY_R_CURVE, KEY_PAD_ACCEL, KEY_STEAM_APPS, KEY_RADIAL,
+        )
+
+        private fun extras(obj: JSONObject): String? {
+            val x = JSONObject()
+            obj.keys().forEach { k -> if (k !in KNOWN) x.put(k, obj.get(k)) }
+            return if (x.length() == 0) null else x.toString()
+        }
 
         fun clampOuter(v: Int): Int = v.coerceIn(70, 100)
         fun clampCurve(v: Float): Float = if (v.isNaN()) 1f else v.coerceIn(0.5f, 3f)
@@ -200,6 +232,8 @@ data class NamedProfile(
                 rightCurve = clampCurve(obj.optDouble(KEY_R_CURVE, 1.0).toFloat()),
                 padAccel = clampPadAccel(obj.optDouble(KEY_PAD_ACCEL, 0.0).toFloat()),
                 steamAppIds = obj.optJSONArray(KEY_STEAM_APPS)?.let { a -> (0 until a.length()).map { a.optLong(it, 0L) }.filter { it > 0L }.distinct() } ?: emptyList(),
+                radialJson = obj.optJSONObject(KEY_RADIAL)?.toString(),
+                extrasJson = extras(obj),
             )
         }
 

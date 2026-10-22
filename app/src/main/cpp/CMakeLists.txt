@@ -6,7 +6,8 @@ project(uinput_jni)
 add_library(uinput_jni SHARED
     uinput_jni.cpp
     uinput_backend.cpp
-    uhid_backend.cpp)
+    uhid_backend.cpp
+    radial_keyboard.cpp)
 
 find_library(log-lib log)
 target_link_libraries(uinput_jni ${log-lib})

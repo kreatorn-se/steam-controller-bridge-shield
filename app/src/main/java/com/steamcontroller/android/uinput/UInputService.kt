@@ -399,6 +399,41 @@ class UInputService : IUInputService.Stub {
         }
     }
 
+    override fun createKeyboard(): Boolean {
+        touch()
+        if (!isOwnApp(Binder.getCallingUid())) return false
+        return try {
+            UInputNative.createKeyboard()
+        } catch (t: Throwable) {
+            Log.e(TAG, "createKeyboard failed: ${t.message}")
+            false
+        }
+    }
+
+    override fun sendKeyboard(modifiers: Int, keys: IntArray?): Boolean {
+        touch()
+        val k = keys ?: IntArray(0)
+        if (!com.steamcontroller.android.radial.RadialKeys.reportAllowed(modifiers, k)) {
+            Log.w(TAG, "refused keyboard report mods=$modifiers keys=${k.joinToString()}")
+            return false
+        }
+        return try {
+            UInputNative.sendKeyboard(modifiers, k)
+        } catch (t: Throwable) {
+            Log.e(TAG, "sendKeyboard failed: ${t.message}")
+            false
+        }
+    }
+
+    override fun destroyKeyboard() {
+        touch()
+        try {
+            UInputNative.destroyKeyboard()
+        } catch (t: Throwable) {
+            Log.e(TAG, "destroyKeyboard failed: ${t.message}")
+        }
+    }
+
     override fun destroy() {
         touch()
         try {

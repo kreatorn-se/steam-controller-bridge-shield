@@ -284,6 +284,63 @@ class UInputGamepad(
 
     @Volatile private var deviceReady = false
 
+    // ── Radial menus ──────────────────────────────────────────────────────────────────
+
+    /** Buttons, trigger pulls and D-pad the radial's actions hold; merged into every frame. */
+    @Volatile var radialInject: com.steamcontroller.android.radial.RadialInject = com.steamcontroller.android.radial.RadialInject.NONE
+
+    /** Whether the active menus press keys: then the radial keyboard exists in the shell service. */
+    @Volatile private var keyboardWanted = false
+    @Volatile private var keyboardUp = false
+
+    /** Push the last frame again with the current [radialInject] (a tap must not wait for a report). */
+    fun repushForRadial() {
+        if (com.steamcontroller.android.live.ControllerLive.isOutputSuppressed()) return
+        val s = lastState ?: SteamControllerState()
+        pushFrame(s)
+    }
+
+    /** Create or remove the radial keyboard (blocking binder call: radial-config thread). */
+    fun setKeyboardWanted(on: Boolean) {
+        keyboardWanted = on
+        val svc = service ?: return
+        syncKeyboard(svc)
+    }
+
+    private val keyboardLock = Any()
+
+    /** Separate lock: creating the keyboard is a binder call and must never hold up frames. */
+    private fun syncKeyboard(svc: IUInputService) {
+        synchronized(keyboardLock) {
+            try {
+                if (keyboardWanted && !keyboardUp) {
+                    keyboardUp = svc.createKeyboard()
+                    Log.i(TAG, "radial keyboard created → $keyboardUp")
+                } else if (!keyboardWanted && keyboardUp) {
+                    svc.destroyKeyboard()
+                    keyboardUp = false
+                    Log.i(TAG, "radial keyboard removed")
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "radial keyboard: ${t.message}")
+                keyboardUp = false
+            }
+        }
+    }
+
+    /** One report on the radial keyboard; false when it does not exist. Radial action thread. */
+    fun keyboardSend(modifiers: Int, keys: IntArray): Boolean {
+        val svc = service ?: return false
+        if (!keyboardUp) syncKeyboard(svc)
+        if (!keyboardUp) return false
+        return try {
+            svc.sendKeyboard(modifiers, keys)
+        } catch (t: Throwable) {
+            Log.w(TAG, "radial keyboard report failed: ${t.message}")
+            false
+        }
+    }
+
     private val connection =
         object : ServiceConnection {
             override fun onServiceConnected(
@@ -308,6 +365,8 @@ class UInputGamepad(
                             deviceReady = ok
                             Log.i(TAG, "createGamepad(${profile.displayName}) → $ok")
                             if (ok) applyShowImeOverride(svc)
+                            keyboardUp = false
+                            syncKeyboard(svc)
                             // Keep Android from blocking our own restart as "app idle".
                             try {
                                 svc.runShellCommand(arrayOf("cmd", "deviceidle", "whitelist", "+${context.packageName}"))
@@ -335,6 +394,7 @@ class UInputGamepad(
             override fun onServiceDisconnected(name: ComponentName?) {
                 service = null
                 deviceReady = false
+                keyboardUp = false
                 // Critical: without this, bind() short-circuits on `if (bound) return` forever and the
                 // app can never re-establish its user service - a killed service used to leave it
                 // permanently unable to create devices, with no way back except restarting the app.
@@ -346,6 +406,7 @@ class UInputGamepad(
             override fun onBindingDied(name: ComponentName?) {
                 service = null
                 deviceReady = false
+                keyboardUp = false
                 bound = false
                 Log.w(TAG, "UInputService binding died - will re-bind on the next start")
             }
@@ -762,17 +823,19 @@ class UInputGamepad(
             gyro.reset()
         }
 
+        // Radial-menu actions in progress (taps, holds, toggles, macro steps).
+        val ri = radialInject
         try {
             svc.sendFrame(
-                xboxButtons,
+                xboxButtons or ri.buttons,
                 lxCal,
                 ly,
                 rx,
                 ry,
-                lt,
-                rt,
-                dpadX,
-                dpadY,
+                maxOf(lt, ri.lt),
+                maxOf(rt, ri.rt),
+                if (ri.dpadX != 0) ri.dpadX else dpadX,
+                if (ri.dpadY != 0) ri.dpadY else dpadY,
             )
         } catch (t: Throwable) {
             Log.e(TAG, "sendFrame IPC failed: ${t.message}")

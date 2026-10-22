@@ -54,4 +54,12 @@ object UInputNative {
     external fun sendMouseFrame(relX: Int, relY: Int, scrollY: Int, keys: Int)
 
     external fun destroy()
+
+    /** Radial menus: a standard boot keyboard on /dev/uhid (cpp/radial_keyboard.h). */
+    external fun createKeyboard(): Boolean
+
+    /** One boot report: [modifiers] bitmask (E0..E7) and up to six key usages. */
+    external fun sendKeyboard(modifiers: Int, keys: IntArray): Boolean
+
+    external fun destroyKeyboard()
 }

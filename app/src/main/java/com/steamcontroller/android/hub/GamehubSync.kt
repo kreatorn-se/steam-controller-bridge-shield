@@ -146,6 +146,8 @@ object GamehubSync {
             }
         }
         BackupManager.import(ctx, root.toString())
+        // Radial menus are edited on the hub: re-read them (and prefetch their icons) now.
+        com.steamcontroller.android.radial.Radial.reload(ctx)
         GamehubStore.setConfigState(ctx, rev, hashOf(BackupManager.export(ctx)))
         Log.i(TAG, "applied hub config rev $rev")
         Pill.show(ctx, Pill.Kind.INFO, "SETUP UPDATED FROM GAMEHUB")

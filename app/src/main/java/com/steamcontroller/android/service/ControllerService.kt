@@ -276,6 +276,8 @@ class ControllerService : Service() {
 
     // The legacy inject fallback has released its keys for the current suppression.
     private var legacySuppressed = false
+    /** A settings screen suppresses output: the radial menus were reset once for it. */
+    private var radialSuppressed = false
     private var reconnectJob: Job? = null
     private var outcomeJob: Job? = null
 
@@ -364,6 +366,9 @@ class ControllerService : Service() {
         // The shell service is up: let it grant USB access to the Valve devices attached, so the
         // puck needs no "allow" prompt after a reboot, and pick up a device that was waiting.
         uinput.onShellReady = { onShellReadyForUsb() }
+        // Radial menus on the trackpads (active profile's `radial`): engine on the input path,
+        // overlay and actions on their own threads.
+        com.steamcontroller.android.radial.Radial.start(this, uinput)
         createNotificationChannel()
         _serviceStateFlow.value =
             _serviceStateFlow.value.copy(profileId = Prefs.getProfile(this).id)
@@ -613,6 +618,8 @@ class ControllerService : Service() {
     /** ProfileSwitcher (chord or UI) wrote a named profile to the prefs. */
     private fun onNamedProfileApplied() {
         publishActiveProfile(force = true)
+        // New profile, new menus: anything open closes and every held radial input is let go.
+        com.steamcontroller.android.radial.Radial.reload(this)
         syncGamepadProfile()
     }
 
@@ -1221,6 +1228,8 @@ class ControllerService : Service() {
         synchronized(configuredUsbInterfaces) { configuredUsbInterfaces.clear() }
         reader?.unlockInterface()
         confirmedState = null
+        // Close any radial menu and cancel its macros / holds before the pad goes neutral.
+        com.steamcontroller.android.radial.Radial.reset()
         if (mode.isVirtualDevice) uinput.pushNeutral()
         _stateFlow.value = null
         // Battery and firmware belong to the controller that left: the next one (or the same one
@@ -1630,11 +1639,14 @@ class ControllerService : Service() {
         val endpoint = pipe.endpointOut ?: return
         val connection = usbManager.connection ?: return
 
+        // A pad with an open radial menu: no movement ticks (the menu ticks on slice changes
+        // instead), but its click still clicks.
+        val radial = com.steamcontroller.android.radial.Radial
         updateUsbTrackpadHaptic(
             connection,
             endpoint,
             left = true,
-            touching = state.isButtonPressed(Buttons.TP_LT),
+            touching = state.isButtonPressed(Buttons.TP_LT) && !radial.owns(true),
             clicked = state.isButtonPressed(Buttons.TP_LT_CLICK),
             x = state.leftPadX.toInt(),
             y = state.leftPadY.toInt(),
@@ -1645,13 +1657,16 @@ class ControllerService : Service() {
             connection,
             endpoint,
             left = false,
-            touching = state.isButtonPressed(Buttons.TP_RT),
+            touching = state.isButtonPressed(Buttons.TP_RT) && !radial.owns(false),
             clicked = state.isButtonPressed(Buttons.TP_RT_CLICK),
             x = state.rightPadX.toInt(),
             y = state.rightPadY.toInt(),
             tracker = rightPadHaptic,
             nowMs = nowMs,
         )
+        for (left in booleanArrayOf(true, false)) {
+            if (radial.takeHaptic(left)) SteamHidProtocol.sendTrackpadHaptic(connection, endpoint, left, strongClick = false)
+        }
     }
 
     private fun updateUsbTrackpadHaptic(
@@ -1852,6 +1867,10 @@ class ControllerService : Service() {
         // A settings screen is capturing input (input tester, "press a button"): the pad gets a
         // neutral frame and no action fires; the frame itself still went to ControllerLive.
         if (ControllerLive.isOutputSuppressed()) {
+            if (!radialSuppressed) {
+                radialSuppressed = true
+                com.steamcontroller.android.radial.Radial.reset()
+            }
             if (mode.isVirtualDevice) {
                 uinput.pushSuppressed(state)
             } else if (mode == InjectionMode.SHIZUKU_INJECT && !legacySuppressed) {
@@ -1868,12 +1887,15 @@ class ControllerService : Service() {
             return
         }
         legacySuppressed = false
+        radialSuppressed = false
 
         // Virtual devices can consume the controller's already-stable HID report directly.
         // Debouncing here added one or two full wireless frames to every button press.
         if (mode.isVirtualDevice) {
             confirmedState = state
-            uinput.pushFrame(state)
+            // A pad with an open radial menu is taken out of the frame (Radial.process returns the
+            // same object when no menu is involved).
+            uinput.pushFrame(com.steamcontroller.android.radial.Radial.process(state))
             return
         }
 
@@ -1930,6 +1952,7 @@ class ControllerService : Service() {
         } catch (_: Throwable) {
         }
         com.steamcontroller.android.hub.GamehubSync.stop()
+        com.steamcontroller.android.radial.Radial.stop()
         Diagnostics.record(TAG, "service destroyed")
         releaseWakeLock()
         reader?.stop()

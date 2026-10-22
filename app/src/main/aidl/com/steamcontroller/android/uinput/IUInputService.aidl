@@ -56,4 +56,18 @@ interface IUInputService {
     // IUsbManager.grantDevicePermission. Returns 1 when granted, 0 when there is no such Valve
     // device, -1 when refused or failed. Last in the file, so earlier transaction codes stay put.
     int grantUsbPermission(String deviceName);
+
+    // ── Radial menus (1.5.0). Appended after grantUsbPermission so every earlier transaction
+    // code stays put. A standard boot keyboard on /dev/uhid, separate from the sidecar keyboard;
+    // it exists only while the active profile has key actions.
+
+    // Creates the keyboard (no-op when it exists). True when it exists afterwards.
+    boolean createKeyboard();
+
+    // One boot report: modifiers (bits for E0..E7) and up to six key usages. Refused (false)
+    // unless every usage is one radial menus can name (RadialKeys.ALLOWED_USAGES).
+    boolean sendKeyboard(int modifiers, in int[] keys);
+
+    // Releases every key and removes the keyboard.
+    void destroyKeyboard();
 }

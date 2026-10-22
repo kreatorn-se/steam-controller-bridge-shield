@@ -544,4 +544,18 @@
     <string name="dev_update_hint">From GitHub releases, installed through Shizuku</string>
     <string name="dev_diag_upload">Send diagnostics to Gamehub</string>
     <string name="dev_diag_upload_hint">Events, timings and crash reports; never the token or your text</string>
+
+    <!-- ━━━━━━━━━━━━ 1.5.0: radial menus ━━━━━━━━━━━━ -->
+    <string name="radial_section">Radial menus</string>
+    <string name="radial_title">Radial menus</string>
+    <string name="radial_hint">This profile\'s trackpad menus. Edit on gamehub.kreatorn.se</string>
+    <string name="radial_none">None</string>
+    <string name="radial_test">Test radial menus</string>
+    <string name="radial_test_hint">Shows the menu while you touch a pad, a sample where the profile has none. Nothing fires. Ends when you leave this page.</string>
+    <string name="radial_profile">Profile: %1$s</string>
+    <string name="radial_no_profile">no game profile active</string>
+    <string name="radial_left">LEFT PAD</string>
+    <string name="radial_right">RIGHT PAD</string>
+    <string name="radial_off">No menu (the pad works as usual)</string>
+    <string name="radial_edit_on_hub">Edit on gamehub.kreatorn.se → Controller. Changes arrive within a few seconds.</string>
 </resources>
