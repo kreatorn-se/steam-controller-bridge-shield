@@ -71,8 +71,19 @@ class RadialOverlay(context: Context) : RadialEngine.Ui {
 
     private val detachers = arrayOf(Runnable { detach(0) }, Runnable { detach(1) })
 
+    /** [size dp, height % (+ = down), edge distance %] from liveSettings.radialLayout (web sliders). */
+    private fun layout(): FloatArray = try {
+        val o = org.json.JSONObject(com.steamcontroller.android.backup.ConfigExtras.live(app) ?: "{}").optJSONObject("radialLayout")
+        floatArrayOf(
+            (o?.optDouble("size", 220.0) ?: 220.0).toFloat().coerceIn(140f, 420f),
+            (o?.optDouble("height", 0.0) ?: 0.0).toFloat().coerceIn(-40f, 40f),
+            (o?.optDouble("separation", 7.0) ?: 7.0).toFloat().coerceIn(0f, 40f))
+    } catch (_: Exception) { floatArrayOf(220f, 0f, 7f) }
+
     private fun attach(left: Boolean): RadialView? {
         if (!Settings.canDrawOverlays(app)) return null
+        val lay = layout()
+        RadialView.sizeDp = lay[0]
         val v = RadialView(app)
         v.onHidden = { main.removeCallbacks(detachers[side(left)]); main.postDelayed(detachers[side(left)], IDLE_DETACH_MS) }
         val size = v.sizePx
@@ -88,7 +99,8 @@ class RadialOverlay(context: Context) : RadialEngine.Ui {
         ).apply {
             gravity = (if (left) Gravity.START else Gravity.END) or Gravity.CENTER_VERTICAL
             // Inside the overscan-safe area, a little in from the edge on the pad's side.
-            x = (dm.widthPixels * 0.07f).toInt()
+            x = (dm.widthPixels * lay[2] / 100f).toInt()
+            y = (dm.heightPixels * lay[1] / 100f).toInt()
             title = "RadialMenu"
         }
         return try {
@@ -125,8 +137,9 @@ class RadialOverlay(context: Context) : RadialEngine.Ui {
  * slice's colour) as a filled sector with a bright outer arc.
  */
 class RadialView(context: Context) : View(context) {
-    private val d = resources.displayMetrics.density
-    val sizePx = (SIZE_DP * d).toInt()
+    // Everything inside the wheel is drawn in "d" units, scaled with the wheel's size.
+    private val d = resources.displayMetrics.density * (sizeDp / SIZE_DP)
+    val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
 
     var showing = false
         private set
@@ -310,6 +323,8 @@ class RadialView(context: Context) : View(context) {
 
     companion object {
         const val SIZE_DP = 220f
+        /** Size for the next wheel, from liveSettings.radialLayout.size (set before construction). */
+        @Volatile var sizeDp = SIZE_DP
         const val ACCENT = 0xFF1A9FFF.toInt()
         const val TEXT = 0xFFF2F4F7.toInt()
         const val TEXT2 = 0xFF8B929C.toInt()
