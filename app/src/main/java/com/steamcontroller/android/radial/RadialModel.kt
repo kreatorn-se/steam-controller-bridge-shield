@@ -125,9 +125,21 @@ object RadialParser {
      * `radial` key on the profile, or no game profile active — the defaults in
      * `liveSettings.radial`.
      */
-    fun resolve(profileRadial: String?, defaults: String?): ParsedRadial =
-        if (profileRadial != null) parse(profileRadial)
-        else parse(defaults).let { p -> p.copy(problems = p.problems.map { "defaults: $it" }) }
+    fun resolve(profileRadial: String?, defaults: String?): ParsedRadial {
+        if (profileRadial == null || profileRadial.isBlank() || profileRadial.trim() == "null")
+            return parse(defaults).let { p -> p.copy(problems = p.problems.map { "defaults: $it" }) }
+        // A pad the profile doesn't mention uses the default menu for that pad; an explicit null
+        // means no menu (contract v1.1 §4/§5, same as the web editor).
+        val merged = try {
+            val own = JSONObject(profileRadial)
+            val def = if (defaults.isNullOrBlank()) null else try { JSONObject(defaults) } catch (e: Exception) { null }
+            if (def != null) for (side in arrayOf("left", "right")) {
+                if (!own.has(side) && def.has(side)) own.put(side, def.get(side))
+            }
+            own.toString()
+        } catch (e: Exception) { profileRadial }
+        return parse(merged)
+    }
 
     /** Parses `{"left":…,"right":…}` from a string; malformed JSON gives an empty config. */
     fun parse(json: String?): ParsedRadial {
