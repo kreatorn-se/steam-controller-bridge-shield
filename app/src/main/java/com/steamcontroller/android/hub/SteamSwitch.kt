@@ -48,6 +48,7 @@ object SteamSwitch {
         }
         val st = (r as GamehubTv.Res.Ok).value
         ImportStatus.post(st.importing)
+        SteamCloud.observe(c, st.now?.appid ?: 0L)
         if (!profiles) return 30_000L
         apply(c, st.now?.appid ?: 0L)
         return if (gfnInFront(c)) 10_000L else 30_000L

@@ -13,6 +13,9 @@ import com.steamcontroller.android.hub.GamehubClient
 import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.hub.GamehubSync
 import com.steamcontroller.android.hub.LevelsMath
+import com.steamcontroller.android.hub.SteamCloud
+import com.steamcontroller.android.hub.SteamLoginActivity
+import com.steamcontroller.android.ui.widget.ActionRow
 import com.steamcontroller.android.shizuku.ShizukuAdbStarter
 import com.steamcontroller.android.ui.Host
 import com.steamcontroller.android.ui.Page
@@ -39,6 +42,10 @@ class GamehubPage(host: Host) : Page(host) {
     private val linkCard = Kit.card(ctx, 22)
     private val bootCard = Kit.card(ctx, 22)
     private val tvCard = Kit.card(ctx, 22)
+    private val savesCard = Kit.card(ctx, 22)
+    private lateinit var cloudRow: ActionRow
+    private lateinit var fetchRow: ActionRow
+    private lateinit var cloudOffRow: ActionRow
     private lateinit var zoomRow: ToggleRow
     private lateinit var logoRow: ToggleRow
     private lateinit var satRow: ChoiceRow
@@ -54,6 +61,7 @@ class GamehubPage(host: Host) : Page(host) {
     private fun build(): View {
         buildBoot()
         buildTv()
+        buildSaves()
         val content: View = if (wide) {
             Kit.row(ctx, Gravity.TOP).apply {
                 addView(linkCard, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.15f))
@@ -61,6 +69,7 @@ class GamehubPage(host: Host) : Page(host) {
                 addView(Kit.column(ctx).apply {
                     addView(bootCard)
                     addView(tvCard, Kit.lp(t = 16, ctx = ctx))
+                    addView(savesCard, Kit.lp(t = 16, ctx = ctx))
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             }
         } else {
@@ -68,6 +77,7 @@ class GamehubPage(host: Host) : Page(host) {
                 addView(linkCard)
                 addView(bootCard, Kit.lp(t = 8, ctx = ctx))
                 addView(tvCard, Kit.lp(t = 8, ctx = ctx))
+                addView(savesCard, Kit.lp(t = 8, ctx = ctx))
             }
         }
         return ScrollView(ctx).apply {
@@ -77,8 +87,8 @@ class GamehubPage(host: Host) : Page(host) {
         }
     }
 
-    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh() }
-    override fun onShow() { renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh() }
+    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh(); renderSaves() }
+    override fun onShow() { renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh(); renderSaves() }
 
     override fun onFrame(f: LiveFrame) {
         val now = android.os.SystemClock.uptimeMillis()
@@ -237,6 +247,43 @@ class GamehubPage(host: Host) : Page(host) {
             { sats.indexOf(GamehubStore.captureSaturation(ctx)).coerceAtLeast(0) },
             { i -> GamehubStore.setCaptureSaturation(ctx, sats[i]) })
         tvCard.addView(satRow)
+    }
+
+    /** Enshrouded saves from Steam Cloud (hub/SteamCloud.kt): connect once, then automatic. */
+    private fun buildSaves() {
+        savesCard.addView(Kit.label(ctx, ctx.getString(R.string.hub_saves)))
+        savesCard.addView(Kit.body(ctx, ctx.getString(R.string.hub_saves_body), 14f, C.text2), Kit.lp(t = 10, b = 8, ctx = ctx))
+        cloudRow = ActionRow(ctx, ctx.getString(R.string.hub_saves_connect), ctx.getString(R.string.hub_saves_connect_hint)) {
+            ctx.startActivity(android.content.Intent(ctx, SteamLoginActivity::class.java))
+        }
+        savesCard.addView(cloudRow)
+        fetchRow = ActionRow(ctx, ctx.getString(R.string.hub_saves_fetch), null, "") { row ->
+            row.valueView.text = ctx.getString(R.string.hub_saves_fetching)
+            SteamCloud.syncNow(ctx, "by hand") { result ->
+                Pill.show(ctx, Pill.Kind.INFO, result)
+                renderSaves()
+            }
+        }
+        savesCard.addView(fetchRow)
+        cloudOffRow = ActionRow(ctx, ctx.getString(R.string.hub_saves_disconnect), ctx.getString(R.string.hub_saves_disconnect_hint)) {
+            MaterialAlertDialogBuilder(ctx)
+                .setTitle(R.string.hub_saves_disconnect)
+                .setMessage(R.string.hub_saves_disconnect_hint)
+                .setPositiveButton(R.string.hub_saves_disconnect) { _, _ -> SteamCloud.disconnect(ctx); renderSaves() }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+        savesCard.addView(cloudOffRow)
+    }
+
+    private fun renderSaves() {
+        val on = SteamCloud.isConnected(ctx)
+        cloudRow.setTitle(ctx.getString(if (on) R.string.hub_saves_connected else R.string.hub_saves_connect))
+        cloudRow.valueView.text = ""
+        fetchRow.visibility = if (on) View.VISIBLE else View.GONE
+        cloudOffRow.visibility = if (on) View.VISIBLE else View.GONE
+        val last = SteamCloud.lastSync(ctx)
+        fetchRow.valueView.text = if (last > 0) "${ago(last)} · ${SteamCloud.lastResult(ctx) ?: ""}" else ""
     }
 
     private fun buildBoot() {
