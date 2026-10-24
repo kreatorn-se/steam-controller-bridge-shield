@@ -8,8 +8,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The few things that run while the app or the controller service is alive: diagnostics batches
- * (every 2 min), the Steam profile switch (every 30 s, 10 s while GeForce NOW is in front) and the
- * update check (at most every 6 h). Started by MainActivity and by ControllerService; it stops
+ * (every 2 min), the Steam profile switch (every 30 s, 10 s while GeForce NOW is in front), the
+ * update check (at most every 6 h) and the Steam Cloud save check (at most every 6 h). Started by MainActivity and by ControllerService; it stops
  * when neither is around.
  */
 object Background {
@@ -26,6 +26,8 @@ object Background {
         exec = e
         e.scheduleWithFixedDelay({ safe { Diag.flushNow() } }, 30, 120, TimeUnit.SECONDS)
         e.scheduleWithFixedDelay({ safe { Updater.checkIfDue(app) } }, 5, 30 * 60, TimeUnit.SECONDS)
+        // Enshrouded saves from Steam Cloud: after each session (SteamSwitch), and every few hours here.
+        e.scheduleWithFixedDelay({ safe { SteamCloud.checkIfDue(app) } }, 120, 30 * 60, TimeUnit.SECONDS)
         fun steam(delayMs: Long) {
             if (e.isShutdown) return
             e.schedule({
