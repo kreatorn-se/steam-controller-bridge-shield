@@ -23,8 +23,8 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 
 /**
- * Self-update without a PC: the latest GitHub release of this repository, checked at start and
- * then at most every six hours. One press downloads `SteamControllerBridge-v<ver>.apk` into the
+ * Self-update without a PC: the latest GitHub release of this repository, checked every 30 min
+ * and whenever the app comes to the front ([checkIfDue]). One press downloads `SteamControllerBridge-v<ver>.apk` into the
  * app's private files dir and installs it only if all of these hold, checked right before the
  * install on the very descriptor that is installed:
  *
@@ -42,7 +42,10 @@ import java.util.concurrent.Executors
 object Updater {
     private const val API = "https://api.github.com/repos/kreatorn-se/steam-controller-bridge-shield/releases/latest"
     private const val PREFS = "updater"
-    private const val CHECK_EVERY_MS = 6 * 3_600_000L
+    private const val CHECK_EVERY_MS = 30 * 60_000L
+    /** Opening the app (or its device page) looks again once the last check is this old. */
+    const val ON_OPEN_MS = 2 * 60_000L
+    @Volatile private var checking = false
     private val SHA256 = Regex("[0-9a-f]{64}")
     private val ASSET = Regex("""SteamControllerBridge-v([0-9.]+)(-[a-z0-9]+)?\.apk""")
 
@@ -76,47 +79,65 @@ object Updater {
 
     // ── checking ──────────────────────────────────────────────────────────────────────
 
-    /** At start, and from the background loop; checks GitHub at most every six hours. */
-    fun checkIfDue(c: Context, force: Boolean = false) {
+    /**
+     * From the background loop (every 30 min), when the app comes to the front and when the device
+     * page shows ([maxAgeMs] is then [ON_OPEN_MS]). Only a check that reached GitHub and found the
+     * installed version, or a newer one with its APK, counts as done; anything else (no network,
+     * an HTTP error, a release whose APK CI is still uploading) is tried again next time. Until
+     * 1.7.3 every check counted and the next came six hours later, so a release could sit unseen
+     * behind "up to date" for most of a day.
+     */
+    fun checkIfDue(c: Context, force: Boolean = false, maxAgeMs: Long = CHECK_EVERY_MS) {
         val app = c.applicationContext
         // What the last check found shows at once, without the network.
         if (state is State.Idle) remembered(app)?.let { if (isNewer(it.version)) publish(State.Available(it)) }
         val last = p(app).getLong("checked_at", 0L)
-        if (!force && System.currentTimeMillis() - last < CHECK_EVERY_MS) return
+        if (!force && System.currentTimeMillis() - last < maxAgeMs) return
+        if (checking) return
+        checking = true
         io.execute {
-            val rel = try { fetchLatest() } catch (t: Throwable) { Diag.note("update check failed: ${t.javaClass.simpleName}"); return@execute }
-            p(app).edit().putLong("checked_at", System.currentTimeMillis()).apply()
-            if (rel != null && isNewer(rel.version)) {
-                remember(app, rel)
-                if (!busy) publish(State.Available(rel))
-            } else if (!busy) {
-                p(app).edit().remove("rel").apply()
-                publish(State.Idle)
+            try {
+                val (tag, rel) = fetchLatest()
+                if (rel != null && isNewer(rel.version)) {
+                    p(app).edit().putLong("checked_at", System.currentTimeMillis()).apply()
+                    remember(app, rel)
+                    if (!busy) publish(State.Available(rel))
+                } else if (tag != null && !isNewer(tag)) {
+                    p(app).edit().putLong("checked_at", System.currentTimeMillis()).remove("rel").apply()
+                    if (!busy) publish(State.Idle)
+                } else {
+                    Diag.note("update check: v$tag is out but its APK is not there yet; looking again soon")
+                }
+            } catch (t: Throwable) {
+                Diag.note("update check failed: ${t.javaClass.simpleName} ${t.message?.take(80) ?: ""}")
+            } finally {
+                checking = false
             }
         }
     }
 
-    private fun fetchLatest(): Release? {
+    /** The latest release's version (null if GitHub gave none) and its APK, if it has one yet. */
+    private fun fetchLatest(): Pair<String?, Release?> {
         val conn = URL(API).openConnection() as HttpURLConnection
         conn.connectTimeout = 10_000
         conn.readTimeout = 20_000
         conn.setRequestProperty("accept", "application/vnd.github+json")
         conn.setRequestProperty("user-agent", "Gamehub-TV/${BuildConfig.VERSION_NAME}")
         try {
-            if (conn.responseCode != 200) return null
+            if (conn.responseCode != 200) throw java.io.IOException("GitHub answered HTTP ${conn.responseCode}")
             val o = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            if (o.optBoolean("draft") || o.optBoolean("prerelease")) return null
-            val tagVersion = o.optString("tag_name").removePrefix("v").trim()
-            val assets = o.optJSONArray("assets") ?: return null
+            if (o.optBoolean("draft") || o.optBoolean("prerelease")) return null to null
+            val tagVersion = o.optString("tag_name").removePrefix("v").trim().ifEmpty { null }
+            val assets = o.optJSONArray("assets") ?: return tagVersion to null
             for (i in 0 until assets.length()) {
                 val a = assets.optJSONObject(i) ?: continue
                 val name = a.optString("name")
                 val m = ASSET.matchEntire(name) ?: continue
-                val version = m.groupValues[1].ifEmpty { tagVersion }
+                val version = m.groupValues[1].ifEmpty { tagVersion ?: "" }
                 val digest = a.optString("digest").takeIf { it.startsWith("sha256:") }?.removePrefix("sha256:")?.lowercase()
-                return Release(version, name, a.optString("browser_download_url"), a.optLong("size", 0L), digest)
+                return tagVersion to Release(version, name, a.optString("browser_download_url"), a.optLong("size", 0L), digest)
             }
-            return null
+            return tagVersion to null
         } finally {
             conn.disconnect()
         }

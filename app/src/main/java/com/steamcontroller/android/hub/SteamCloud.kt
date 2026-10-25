@@ -2,6 +2,7 @@ package com.steamcontroller.android.hub
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -52,6 +53,7 @@ object SteamCloud {
     private const val K_DUE = "due"                 // the pass after a session is due at (ms, 0 = none)
     private const val K_TRIES = "tries"             // passes after that session so far
     private const val K_ASKED = "asked"             // when a session last ended without Steam connected
+    private const val K_LOGIN_DUE = "login_due"     // open Steam's sign-in once GeForce NOW is closed
 
     // GeForce NOW writes the last save to Steam Cloud as the session closes: give it a moment.
     private const val AFTER_SESSION_MS = 3 * 60_000L
@@ -94,9 +96,9 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
         val now = System.currentTimeMillis()
         if (!isConnected(c)) {
             Diag.note("steam cloud: Enshrouded session ended, but Steam Cloud is not connected on this Shield", tag = TAG)
-            // At most once a day: where to connect it.
+            // At most once a day: Steam's sign-in opens by itself once GeForce NOW is closed (tick).
             if (now - p(c).getLong(K_ASKED, 0L) > 20 * 3_600_000L) {
-                p(c).edit().putLong(K_ASKED, now).apply()
+                p(c).edit().putLong(K_ASKED, now).putBoolean(K_LOGIN_DUE, true).apply()
                 Pill.show(c, Pill.Kind.INFO, c.getString(R.string.hub_saves_not_connected))
             }
             return
@@ -110,8 +112,12 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
      * hours in case a session end was missed. Never while a game is on or GeForce NOW is in front.
      */
     fun tick(c: Context, gfnInFront: Boolean) {
-        if (running || !isConnected(c) || !GamehubStore.isLinked(c)) return
+        if (running || !GamehubStore.isLinked(c)) return
         if (gfnInFront || p(c).getLong(K_APP, 0L) != 0L) return
+        if (!isConnected(c)) {
+            if (p(c).getBoolean(K_LOGIN_DUE, false)) openLogin(c)
+            return
+        }
         val now = System.currentTimeMillis()
         val due = p(c).getLong(K_DUE, 0L)
         if (due in 1..now) {
@@ -129,6 +135,23 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
             return
         }
         if (now - lastSync(c) >= PERIODIC_MS) syncNow(c, "periodic")
+    }
+
+    /**
+     * After a session that could not be fetched: Steam's sign-in, full screen, once GeForce NOW is
+     * closed. Until 1.7.3 only a pill pointed to the Gamehub page, and no login ever happened. The
+     * app may start it from the background: it holds the overlay permission.
+     */
+    private fun openLogin(c: Context) {
+        p(c).edit().putBoolean(K_LOGIN_DUE, false).apply()
+        Diag.note("steam cloud: not connected after a session, opening Steam sign-in", tag = TAG)
+        main.post {
+            try {
+                c.startActivity(Intent(c, SteamLoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (t: Throwable) {
+                Diag.note("steam cloud: could not open Steam sign-in: ${t.javaClass.simpleName} ${t.message?.take(80) ?: ""}", tag = TAG)
+            }
+        }
     }
 
     /** One pass now. [onDone] runs on the main thread with a line for the screen. */

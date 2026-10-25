@@ -1,10 +1,13 @@
 package com.steamcontroller.android.hub
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -22,6 +25,8 @@ import com.steamcontroller.android.ui.widget.Kit
  */
 class SteamLoginActivity : AppCompatActivity() {
     private lateinit var web: WebView
+    private var lastPage: String? = null
+    private var connected = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,15 +48,26 @@ class SteamLoginActivity : AppCompatActivity() {
             addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(hint, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.BOTTOM))
         })
+        Diag.note("steam login: opened", tag = TAG)
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
+                // Where Steam's pages went (host and path only, never the query), so a login that
+                // never finishes shows in Gamehub's diagnostics.
+                val at = Uri.parse(url).let { "${it.host}${it.path}" }
+                if (at != lastPage) { lastPage = at; Diag.note("steam login: page $at", tag = TAG) }
                 if (url.contains("remotestorageapp") && !isFinishing) {
+                    connected = true
+                    Diag.note("steam login: connected", tag = TAG)
                     CookieManager.getInstance().flush()
                     SteamCloud.setConnected(this@SteamLoginActivity, true)
                     Pill.show(this@SteamLoginActivity, Pill.Kind.CONNECTED, "Steam Cloud connected")
                     SteamCloud.syncNow(this@SteamLoginActivity, "connected")
                     finish()
                 }
+            }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) Diag.note("steam login: page failed ${error.errorCode} ${error.description}", level = "w", tag = TAG)
             }
         }
         web.loadUrl(SteamCloud.LOGIN)
@@ -64,7 +80,15 @@ class SteamLoginActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (!connected) {
+            Diag.note("steam login: left without connecting, last page ${lastPage ?: "none"}", tag = TAG)
+            Diag.flushSoon(5_000L)
+        }
         web.destroy()
         super.onDestroy()
+    }
+
+    private companion object {
+        const val TAG = "SteamCloud"
     }
 }
