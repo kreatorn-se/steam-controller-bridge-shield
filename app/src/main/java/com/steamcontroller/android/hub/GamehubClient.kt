@@ -94,6 +94,18 @@ class GamehubClient(private val baseUrl: String, private val token: String?) {
         return JSONObject(text).getString("id")
     }
 
+    /** One Enshrouded save file from Steam Cloud (character before world). Safe to repeat. */
+    fun putEnshFile(name: String, bytes: ByteArray) {
+        val conn = open("PUT", "/api/device/ensh/files/$name", auth = true)
+        conn.doOutput = true
+        conn.setRequestProperty("content-type", "application/octet-stream")
+        conn.setFixedLengthStreamingMode(bytes.size)
+        conn.outputStream.use { it.write(bytes) }
+        val status = conn.responseCode
+        val text = readBody(conn)
+        if (status != 200) throw HubException(status, errorOf(text) ?: "HTTP $status")
+    }
+
     private fun request(method: String, path: String, json: String? = null, auth: Boolean = true): Pair<Int, String> {
         val conn = open(method, path, auth)
         if (json != null) {

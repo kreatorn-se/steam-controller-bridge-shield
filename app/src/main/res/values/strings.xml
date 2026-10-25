@@ -331,6 +331,15 @@
     <string name="hub_testing">Connecting… accept the prompt on the TV if it appears.</string>
     <string name="hub_test_ok">Ready. After a reboot Shizuku and the bridge start by themselves.</string>
     <string name="hub_tv">Slideshow on this TV</string>
+    <string name="hub_saves">Enshrouded saves</string>
+    <string name="hub_saves_body">After each Enshrouded session, this Shield fetches your saves from Steam Cloud and sends them to Gamehub. Nothing on the PC needed.</string>
+    <string name="hub_saves_connect">Connect Steam Cloud</string>
+    <string name="hub_saves_connect_hint">Log in once with the Steam app on your phone (QR code)</string>
+    <string name="hub_saves_connected">Steam Cloud connected</string>
+    <string name="hub_saves_fetch">Fetch saves now</string>
+    <string name="hub_saves_fetching">Fetching…</string>
+    <string name="hub_saves_disconnect">Disconnect Steam Cloud</string>
+    <string name="hub_saves_disconnect_hint">Logs this Shield out of Steam in this app. Saves already in Gamehub stay.</string>
     <string name="hub_slow_zoom">Slow zoom</string>
     <string name="hub_slow_zoom_hint">Gently zoom pictures in the slideshow, the screensaver and the home hero. Off shows every picture still, at its native fit.</string>
     <string name="hub_show_logo">Game logo on large images</string>

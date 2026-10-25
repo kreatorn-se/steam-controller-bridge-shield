@@ -98,6 +98,13 @@
             android:exported="false"
             android:parentActivityName=".MainActivity" />
 
+        <!-- Steam's login page for the Enshrouded saves in Steam Cloud (hub/SteamCloud.kt) -->
+        <activity
+            android:name=".hub.SteamLoginActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:parentActivityName=".MainActivity" />
+
         <receiver
             android:name=".service.AutoStartReceiver"
             android:enabled="true"
