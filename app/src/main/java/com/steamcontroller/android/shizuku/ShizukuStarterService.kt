@@ -18,9 +18,15 @@ import com.steamcontroller.android.service.ControllerService
 import rikka.shizuku.Shizuku
 
 /**
- * Performs the two Shizuku wireless-start clicks that cannot receive D-pad focus on Android TV.
- * The service sees only Shizuku, stays inert until explicitly armed, expires after 45 seconds,
- * and disarms after selecting the discovered adb port.
+ * "Gamehub keeper" in Accessibility settings, two jobs:
+ *
+ * - While enabled, the system keeps it bound, which lifts this whole process from a foreground
+ *   service's oom_score_adj (200) to a visible app's (100), so the Shield's low-memory killer
+ *   takes other services first during a GeForce NOW stream (see ProcessHealth). Nothing to do
+ *   here for that: the binding is the point.
+ * - Performs the two Shizuku wireless-start clicks that cannot receive D-pad focus on Android TV.
+ *   The service sees only Shizuku, stays inert until explicitly armed, expires after 45 seconds,
+ *   and disarms after selecting the discovered adb port.
  */
 class ShizukuStarterService : AccessibilityService() {
     override fun onServiceConnected() {

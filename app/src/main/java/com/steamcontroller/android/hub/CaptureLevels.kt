@@ -22,10 +22,11 @@ import java.util.concurrent.Executors
  *
  * screencap leaves the capture in the queue as `<id>.raw`, which neither the uploader nor the
  * housekeeping touches. Normally that is the raw framebuffer (`screencap <file>.raw`, [RawFrame]):
- * written in about a second, read straight into a bitmap, no PNG decode. A `screencap -p` PNG
- * (the fallback when the raw frame is in a format we do not take, or too many raws are waiting)
- * goes through the same steps via BitmapFactory. One background thread does this (a 4K frame is a
- * 33 MB bitmap, so never two at once), then the capture appears as `<id>.png` by rename, so the
+ * written in about a second, read in bands of rows and written band by band as PNG ([PngStream]),
+ * so it never sits in memory whole. A `screencap -p` PNG (the fallback when the raw frame is in a
+ * format we do not take, or too many raws are waiting) goes through the same steps via
+ * BitmapFactory. One background thread does this (a decoded 4K PNG is a 33 MB bitmap, so never
+ * two at once), then the capture appears as `<id>.png` by rename, so the
  * uploader and the preview JPEG only ever see the finished image.
  *
  * Failures: a PNG input is published as captured. A raw frame cannot be (it is not an image
@@ -334,26 +335,38 @@ object CaptureLevels {
             val sat = if (plain) 0 else saturation
             val lut = if (expand) LevelsMath.EXPAND_LUT else null
 
-            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            // Band by band straight into the PNG (PngStream): no 33 MB bitmap, so a burst of
+            // captures no longer makes this the process the low-memory killer picks.
+            out.delete()
             try {
-                raf.seek(hdr.offset.toLong())
-                var alphaAnd = 0xFF
-                var y0 = 0
-                while (y0 < h) {
-                    val rows = minOf(BAND_ROWS, h - y0)
-                    raf.readFully(bytes, 0, rows * rowBytes)
-                    RawFrame.toArgb(bytes, 0, px, 0, w * rows)
-                    alphaAnd = alphaAnd and LevelsMath.process(px, w * rows, lut, sat)
-                    bmp.setPixels(px, 0, w, 0, y0, w, rows)
-                    y0 += rows
+                FileOutputStream(out).use { fos ->
+                    val png = PngStream(fos, w, h)
+                    try {
+                        raf.seek(hdr.offset.toLong())
+                        var y0 = 0
+                        while (y0 < h) {
+                            val rows = minOf(BAND_ROWS, h - y0)
+                            raf.readFully(bytes, 0, rows * rowBytes)
+                            RawFrame.toArgb(bytes, 0, px, 0, w * rows)
+                            LevelsMath.process(px, w * rows, lut, sat)
+                            png.rows(px, rows)
+                            y0 += rows
+                        }
+                        png.finish()
+                    } catch (t: Throwable) {
+                        png.abandon()
+                        throw t
+                    }
+                    fos.fd.sync()
                 }
-                encode(bmp, alphaAnd, out)?.let { return it }
+                if (!CaptureStore.isCompletePng(out)) {
+                    out.delete()
+                    return Outcome.Failed("re-encoded PNG incomplete")
+                }
                 return Outcome.Encoded(levels, expand, sat)
             } catch (t: Throwable) {
                 out.delete()
                 throw t
-            } finally {
-                bmp.recycle()
             }
         }
     }
