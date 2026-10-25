@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
 /**
  * The few things that run while the app or the controller service is alive: diagnostics batches
  * (every 2 min), the Steam profile switch (every 30 s, 10 s while GeForce NOW is in front), the
- * update check (at most every 6 h), the Steam Cloud save pass (after each Enshrouded session, else
+ * update check (every 30 min), the Steam Cloud save pass (after each Enshrouded session, else
  * at most every 6 h) and, once per process, why Android ended the last ones (ProcessHealth), with
  * a memory line every 5 min while a game is on. Started by MainActivity and by ControllerService;
  * it stops when neither is around.

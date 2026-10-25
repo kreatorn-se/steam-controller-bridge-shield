@@ -341,7 +341,7 @@
     <string name="hub_saves_fetching">Fetching…</string>
     <string name="hub_saves_disconnect">Disconnect Steam Cloud</string>
     <string name="hub_saves_disconnect_hint">Logs this Shield out of Steam in this app. Saves already in Gamehub stay.</string>
-    <string name="hub_saves_not_connected">Saves not sent · connect Steam Cloud in Gamehub</string>
+    <string name="hub_saves_not_connected">Saves not sent · Steam sign-in opens when you leave GeForce NOW</string>
     <string name="hub_saves_next">Next steps</string>
     <string name="hub_saves_next_none">Open Enshrouded on Gamehub once after a session and your next steps show up here.</string>
     <string name="ensh_guide_title">Enshrouded · next steps</string>

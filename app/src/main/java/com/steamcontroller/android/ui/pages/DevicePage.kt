@@ -235,6 +235,7 @@ class DevicePage(host: Host) : Page(host) {
     override fun onShow() {
         shown = true; slowAt = 0L; renderBt()
         com.steamcontroller.android.update.Updater.observe(updateListener)
+        com.steamcontroller.android.update.Updater.checkIfDue(ctx, maxAgeMs = com.steamcontroller.android.update.Updater.ON_OPEN_MS)
     }
     override fun onHide() {
         shown = false

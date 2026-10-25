@@ -274,6 +274,8 @@ class MainActivity : AppCompatActivity(), Host {
     override fun onResume() {
         super.onResume()
         resumed = true
+        // Coming back to the app looks for an update again (at most every couple of minutes).
+        com.steamcontroller.android.update.Updater.checkIfDue(this, maxAgeMs = com.steamcontroller.android.update.Updater.ON_OPEN_MS)
         ticker.invalidateSlow()
         ticker.start()
         pages[current]?.let { it.refresh(); it.onShow() }
