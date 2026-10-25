@@ -109,7 +109,7 @@ object SteamSwitch {
     }
 
     /** GeForce NOW in front, read cheaply when usage access is granted; otherwise assume not. */
-    private fun gfnInFront(c: Context): Boolean = try {
+    fun gfnInFront(c: Context): Boolean = try {
         com.steamcontroller.android.service.UsageStatsHelper.hasPermission(c) &&
             com.steamcontroller.android.service.UsageStatsHelper.getCurrentForegroundApp(c) == "com.nvidia.geforcenow"
     } catch (_: Throwable) {

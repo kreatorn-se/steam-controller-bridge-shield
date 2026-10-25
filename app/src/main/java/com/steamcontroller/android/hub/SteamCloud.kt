@@ -6,8 +6,11 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.steamcontroller.android.R
+import com.steamcontroller.android.ui.pill.Pill
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -27,6 +30,12 @@ import java.net.URL
  * the page is loaded in a WebView that is never shown; the character and world files that changed
  * are downloaded and sent to Gamehub (`PUT /api/device/ensh/files/<name>`, character before world).
  * Gamehub's Enshrouded page reads them the next time it is opened.
+ *
+ * The pass after a session is kept in preferences ([K_DUE]), not in a timer, so it still happens
+ * when the low-memory killer ends the process meanwhile; [tick] (every minute, from [Background])
+ * runs it once it is due, never while a game is on or GeForce NOW is in front (a WebView next to a
+ * stream is the last thing the Shield's memory needs). GeForce NOW can be slow to write the last
+ * save to the cloud: when the pass finds nothing new it looks again after 10 and 30 minutes.
  */
 object SteamCloud {
     private const val TAG = "SteamCloud"
@@ -40,11 +49,16 @@ object SteamCloud {
     private const val K_RESULT = "result"           // what that pass did, for the Gamehub page
     private const val K_SENT = "sent"               // {fileName: "date|size"} of what Gamehub has
     private const val K_APP = "appid"               // the Steam game last seen playing (0 = none)
+    private const val K_DUE = "due"                 // the pass after a session is due at (ms, 0 = none)
+    private const val K_TRIES = "tries"             // passes after that session so far
+    private const val K_ASKED = "asked"             // when a session last ended without Steam connected
 
     // GeForce NOW writes the last save to Steam Cloud as the session closes: give it a moment.
     private const val AFTER_SESSION_MS = 3 * 60_000L
     private const val PERIODIC_MS = 6 * 3_600_000L
     private const val PAGE_TIMEOUT_MS = 90_000L
+    // Looks again when the pass after a session found nothing new (GeForce NOW writes late).
+    private val AGAIN_MS = longArrayOf(10 * 60_000L, 30 * 60_000L)
     private const val MAX_FILE_BYTES = 16 * 1024 * 1024
     private val SAVE_FILE = Regex("^(character|world)\\d{1,2}\\.ksd$")
 
@@ -76,19 +90,45 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
         val last = p(c).getLong(K_APP, 0L)
         if (appid == last) return
         p(c).edit().putLong(K_APP, appid).apply()
-        if (last == ENSHROUDED_APPID && isConnected(c)) {
-            Diag.note("steam cloud: Enshrouded session ended, fetching saves in 3 min", tag = TAG)
-            // Then the next steps from Gamehub on the TV for a moment (EnshGuide).
-            main.postDelayed({ syncNow(c, "session") { EnshGuide.afterSession(c) } }, AFTER_SESSION_MS)
+        if (last != ENSHROUDED_APPID) return
+        val now = System.currentTimeMillis()
+        if (!isConnected(c)) {
+            Diag.note("steam cloud: Enshrouded session ended, but Steam Cloud is not connected on this Shield", tag = TAG)
+            // At most once a day: where to connect it.
+            if (now - p(c).getLong(K_ASKED, 0L) > 20 * 3_600_000L) {
+                p(c).edit().putLong(K_ASKED, now).apply()
+                Pill.show(c, Pill.Kind.INFO, c.getString(R.string.hub_saves_not_connected))
+            }
+            return
         }
+        p(c).edit().putLong(K_DUE, now + AFTER_SESSION_MS).putInt(K_TRIES, 0).apply()
+        Diag.note("steam cloud: Enshrouded session ended, fetching saves in 3 min", tag = TAG)
     }
 
-    /** From [Background]: a pass every few hours, in case a session end was missed. Never mid-game. */
-    fun checkIfDue(c: Context) {
-        if (!isConnected(c) || !GamehubStore.isLinked(c)) return
-        if (p(c).getLong(K_APP, 0L) == ENSHROUDED_APPID) return
-        if (System.currentTimeMillis() - lastSync(c) < PERIODIC_MS) return
-        syncNow(c, "periodic")
+    /**
+     * From [Background], every minute: the pass after a session once it is due, or one every few
+     * hours in case a session end was missed. Never while a game is on or GeForce NOW is in front.
+     */
+    fun tick(c: Context, gfnInFront: Boolean) {
+        if (running || !isConnected(c) || !GamehubStore.isLinked(c)) return
+        if (gfnInFront || p(c).getLong(K_APP, 0L) != 0L) return
+        val now = System.currentTimeMillis()
+        val due = p(c).getLong(K_DUE, 0L)
+        if (due in 1..now) {
+            val tries = p(c).getInt(K_TRIES, 0)
+            // The next look, written before this one starts: a process that dies meanwhile retries.
+            val next = if (tries < AGAIN_MS.size) now + AGAIN_MS[tries] else 0L
+            p(c).edit().putInt(K_TRIES, tries + 1).putLong(K_DUE, next).apply()
+            syncNow(c, if (tries == 0) "session" else "session, look ${tries + 1}") { result ->
+                if (result.startsWith("Sent")) {
+                    p(c).edit().putLong(K_DUE, 0L).apply()
+                    // Then the next steps from Gamehub on the TV for a moment (EnshGuide).
+                    EnshGuide.afterSession(c)
+                }
+            }
+            return
+        }
+        if (now - lastSync(c) >= PERIODIC_MS) syncNow(c, "periodic")
     }
 
     /** One pass now. [onDone] runs on the main thread with a line for the screen. */
@@ -99,9 +139,17 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun start(app: Context, why: String, onDone: ((String) -> Unit)?) {
-        if (running) { onDone?.invoke("Already fetching"); return }
-        if (!isConnected(app)) { onDone?.invoke("Not connected to Steam"); return }
-        if (!GamehubStore.isLinked(app)) { onDone?.invoke("This Shield is not linked to Gamehub"); return }
+        val skip = when {
+            running -> "Already fetching"
+            !isConnected(app) -> "Not connected to Steam"
+            !GamehubStore.isLinked(app) -> "This Shield is not linked to Gamehub"
+            else -> null
+        }
+        if (skip != null) {
+            Diag.note("steam cloud ($why): $skip", tag = TAG)
+            onDone?.invoke(skip)
+            return
+        }
         running = true
         CookieManager.getInstance().setAcceptCookie(true)
         val wv = WebView(app) // never attached to a window
@@ -117,10 +165,18 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
             running = false
             p(app).edit().putLong(K_LAST_SYNC, System.currentTimeMillis()).putString(K_RESULT, result).apply()
             Diag.note("steam cloud ($why): $result", tag = TAG)
+            Diag.flushSoon(5_000L)
             onDone?.invoke(result)
         }
         main.postAtTime({ finish("Steam's page did not load in time") }, wv, android.os.SystemClock.uptimeMillis() + PAGE_TIMEOUT_MS)
         wv.webViewClient = object : WebViewClient() {
+            // Android ended the page's renderer (low memory, or it crashed): without this the
+            // whole app, the controller service with it, would be ended too.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                main.post { finish(if (detail.didCrash()) "Steam's page crashed" else "Android stopped Steam's page (low memory)") }
+                return true
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
                 if (finished) return
                 if (url.contains("/login")) {
