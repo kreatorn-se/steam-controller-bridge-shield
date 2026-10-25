@@ -130,7 +130,7 @@ class GamehubClient(private val baseUrl: String, private val token: String?) {
         val arr = g.optJSONArray("lines")
         val lines = if (arr == null) emptyList() else (0 until arr.length())
             .mapNotNull { i -> if (arr.isNull(i)) null else arr.optString(i).trim().takeIf { it.isNotEmpty() } }
-        return Guide(str("character"), str("world"), g.optLong("createdAt", 0L), lines, str("intro").takeIf { it.isNotEmpty() })
+        return Guide(str("character"), str("world"), g.optLong("savedAt", g.optLong("createdAt", 0L)), lines, str("intro").takeIf { it.isNotEmpty() })
     }
 
     private fun request(method: String, path: String, json: String? = null, auth: Boolean = true): Pair<Int, String> {
