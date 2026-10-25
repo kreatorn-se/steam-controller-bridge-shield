@@ -106,6 +106,33 @@ class GamehubClient(private val baseUrl: String, private val token: String?) {
         if (status != 200) throw HubException(status, errorOf(text) ?: "HTTP $status")
     }
 
+    /** Claude's next steps for Enshrouded, written on Gamehub once per save ([lines] are the steps). */
+    data class Guide(val character: String, val world: String, val createdAt: Long, val lines: List<String>, val intro: String?)
+
+    /**
+     * The newest Enshrouded guide (`GET /api/device/ensh/guide`). Null when there is none yet, when
+     * the hub does not have the endpoint (404), or when it cannot be reached: never throws.
+     */
+    fun getEnshGuide(): Guide? = try {
+        val (status, text) = request("GET", "/api/device/ensh/guide")
+        if (status != 200) null else parseGuide(text)
+    } catch (_: IOException) {
+        null
+    } catch (_: org.json.JSONException) {
+        null
+    }
+
+    private fun parseGuide(text: String): Guide? {
+        val o = JSONObject(text)
+        if (o.isNull("guide")) return null
+        val g = o.optJSONObject("guide") ?: return null
+        fun str(k: String) = if (g.isNull(k)) "" else g.optString(k).trim()
+        val arr = g.optJSONArray("lines")
+        val lines = if (arr == null) emptyList() else (0 until arr.length())
+            .mapNotNull { i -> if (arr.isNull(i)) null else arr.optString(i).trim().takeIf { it.isNotEmpty() } }
+        return Guide(str("character"), str("world"), g.optLong("createdAt", 0L), lines, str("intro").takeIf { it.isNotEmpty() })
+    }
+
     private fun request(method: String, path: String, json: String? = null, auth: Boolean = true): Pair<Int, String> {
         val conn = open(method, path, auth)
         if (json != null) {

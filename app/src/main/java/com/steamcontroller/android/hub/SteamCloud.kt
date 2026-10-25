@@ -62,6 +62,8 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
     fun setConnected(c: Context, on: Boolean) { p(c).edit().putBoolean(K_CONNECTED, on).apply() }
     fun lastSync(c: Context): Long = p(c).getLong(K_LAST_SYNC, 0L)
     fun lastResult(c: Context): String? = p(c).getString(K_RESULT, null)
+    /** The Steam game the last `/now` poll saw being played (0 = none). */
+    fun playingAppId(c: Context): Long = p(c).getLong(K_APP, 0L)
 
     /** Log out of Steam in this app and forget what was sent (the next login sends everything again). */
     fun disconnect(c: Context) {
@@ -76,7 +78,8 @@ out.push({name:name,size:cells[i+1]||'',date:cells[i+2]||'',href:a.href});});ret
         p(c).edit().putLong(K_APP, appid).apply()
         if (last == ENSHROUDED_APPID && isConnected(c)) {
             Diag.note("steam cloud: Enshrouded session ended, fetching saves in 3 min", tag = TAG)
-            main.postDelayed({ syncNow(c, "session") }, AFTER_SESSION_MS)
+            // Then the next steps from Gamehub on the TV for a moment (EnshGuide).
+            main.postDelayed({ syncNow(c, "session") { EnshGuide.afterSession(c) } }, AFTER_SESSION_MS)
         }
     }
 

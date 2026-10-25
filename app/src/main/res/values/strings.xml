@@ -340,6 +340,13 @@
     <string name="hub_saves_fetching">Fetching…</string>
     <string name="hub_saves_disconnect">Disconnect Steam Cloud</string>
     <string name="hub_saves_disconnect_hint">Logs this Shield out of Steam in this app. Saves already in Gamehub stay.</string>
+    <string name="hub_saves_next">Next steps</string>
+    <string name="hub_saves_next_none">Open Enshrouded on Gamehub once after a session and your next steps show up here.</string>
+    <string name="ensh_guide_title">Enshrouded · next steps</string>
+    <string name="ensh_guide_who">%1$s in %2$s</string>
+    <string name="ensh_guide_from">From your save of %1$s</string>
+    <string name="ensh_guide_close">Any button closes</string>
+    <string name="ensh_guide_pill">Enshrouded · next steps in Gamehub</string>
     <string name="hub_slow_zoom">Slow zoom</string>
     <string name="hub_slow_zoom_hint">Gently zoom pictures in the slideshow, the screensaver and the home hero. Off shows every picture still, at its native fit.</string>
     <string name="hub_show_logo">Game logo on large images</string>
