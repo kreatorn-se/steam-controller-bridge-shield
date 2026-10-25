@@ -60,6 +60,7 @@ object Pill {
             try { overlay?.hideNow() } catch (t: Throwable) { Log.w(TAG, "hide failed: ${t.message}") }
             try { toast?.cancel() } catch (_: Throwable) { }
             toast = null
+            try { GuideOverlay.hideNow() } catch (_: Throwable) { }
             latch.countDown()
         }
         if (onMain) { hide.run(); return }

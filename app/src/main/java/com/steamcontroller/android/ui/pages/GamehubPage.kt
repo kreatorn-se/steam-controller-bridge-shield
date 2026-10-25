@@ -9,6 +9,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.steamcontroller.android.R
 import com.steamcontroller.android.hub.CaptureStore
+import com.steamcontroller.android.hub.EnshGuide
 import com.steamcontroller.android.hub.GamehubClient
 import com.steamcontroller.android.hub.GamehubStore
 import com.steamcontroller.android.hub.GamehubSync
@@ -46,6 +47,9 @@ class GamehubPage(host: Host) : Page(host) {
     private lateinit var cloudRow: ActionRow
     private lateinit var fetchRow: ActionRow
     private lateinit var cloudOffRow: ActionRow
+    private val guideBox = Kit.column(ctx)
+    private var guideAt = 0L
+    private var guideBusy = false
     private lateinit var zoomRow: ToggleRow
     private lateinit var logoRow: ToggleRow
     private lateinit var satRow: ChoiceRow
@@ -87,8 +91,8 @@ class GamehubPage(host: Host) : Page(host) {
         }
     }
 
-    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh(); renderSaves() }
-    override fun onShow() { renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh(); renderSaves() }
+    override fun refresh() { linkedShown = null; renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh(); renderSaves(); guideAt = 0L; loadGuide() }
+    override fun onShow() { renderLink(); zoomRow.refresh(); logoRow.refresh(); satRow.refresh(); renderSaves(); loadGuide() }
 
     override fun onFrame(f: LiveFrame) {
         val now = android.os.SystemClock.uptimeMillis()
@@ -253,6 +257,8 @@ class GamehubPage(host: Host) : Page(host) {
     private fun buildSaves() {
         savesCard.addView(Kit.label(ctx, ctx.getString(R.string.hub_saves)))
         savesCard.addView(Kit.body(ctx, ctx.getString(R.string.hub_saves_body), 14f, C.text2), Kit.lp(t = 10, b = 8, ctx = ctx))
+        savesCard.addView(guideBox, Kit.lp(t = 6, b = 12, ctx = ctx))
+        renderGuide(EnshGuide.last)
         cloudRow = ActionRow(ctx, ctx.getString(R.string.hub_saves_connect), ctx.getString(R.string.hub_saves_connect_hint)) {
             ctx.startActivity(android.content.Intent(ctx, SteamLoginActivity::class.java))
         }
@@ -274,6 +280,51 @@ class GamehubPage(host: Host) : Page(host) {
                 .show()
         }
         savesCard.addView(cloudOffRow)
+    }
+
+    /** The newest Enshrouded guide from Gamehub; at most once every 30 s while the page is shown. */
+    private fun loadGuide() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (guideBusy || (guideAt > 0 && now - guideAt < 30_000L)) return
+        if (!GamehubStore.isLinked(ctx)) { renderGuide(null); return }
+        guideBusy = true
+        guideAt = now
+        host.activity.lifecycleScope.launch {
+            val g = EnshGuide.load(ctx) ?: EnshGuide.last
+            guideBusy = false
+            renderGuide(g)
+        }
+    }
+
+    /** "NEXT STEPS · WILL IN ZENITH", the date, the numbered lines, the intro smaller. */
+    private fun renderGuide(g: GamehubClient.Guide?) {
+        guideBox.removeAllViews()
+        if (!GamehubStore.isLinked(ctx)) { guideBox.visibility = View.GONE; return }
+        guideBox.visibility = View.VISIBLE
+        val head = Kit.row(ctx)
+        head.addView(Kit.label(ctx, ctx.getString(R.string.hub_saves_next), 11f, C.accent))
+        if (g == null || g.lines.isEmpty()) {
+            guideBox.addView(head)
+            guideBox.addView(Kit.body(ctx, ctx.getString(R.string.hub_saves_next_none), 13f, C.text3), Kit.lp(t = 6, ctx = ctx))
+            return
+        }
+        EnshGuide.who(ctx, g)?.let {
+            head.addView(Kit.label(ctx, "· $it", 11f, C.text3), Kit.lp(ViewGroup.LayoutParams.WRAP_CONTENT, l = 6, ctx = ctx))
+        }
+        guideBox.addView(head)
+        EnshGuide.dateLine(ctx, g)?.let { guideBox.addView(Kit.body(ctx, it, 12.5f, C.text3), Kit.lp(t = 4, ctx = ctx)) }
+        g.lines.take(3).forEachIndexed { i, line ->
+            val row = Kit.row(ctx, Gravity.TOP)
+            row.addView(Kit.label(ctx, "${i + 1}", 14f, C.accent).apply { minWidth = ctx.dp(18) })
+            row.addView(Kit.body(ctx, line, 14.5f, C.text), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            guideBox.addView(row, Kit.lp(t = if (i == 0) 10 else 6, ctx = ctx))
+        }
+        g.intro?.let {
+            guideBox.addView(Kit.body(ctx, it, 12.5f, C.text2).apply {
+                maxLines = 4
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, Kit.lp(t = 10, ctx = ctx))
+        }
     }
 
     private fun renderSaves() {
