@@ -3,6 +3,7 @@ package com.steamcontroller.android.backup
 import android.content.Context
 import com.steamcontroller.android.Prefs
 import com.steamcontroller.android.input.GyroActivation
+import com.steamcontroller.android.input.GyroSteerJson
 import com.steamcontroller.android.input.NamedProfile
 import com.steamcontroller.android.input.SteamButton
 import com.steamcontroller.android.input.StickCalibration
@@ -57,6 +58,7 @@ object BackupManager {
                     put("biasY", gyro.biasY.toDouble())
                 }
             )
+            put(NamedProfile.KEY_STEER, GyroSteerJson.toJson(Prefs.getGyroSteer(context)))
             put(
                 "mapping",
                 JSONObject().apply {
@@ -199,6 +201,7 @@ object BackupManager {
                     gyro.optDouble("biasY", 0.0).toFloat()
                 )
             }
+            live.optJSONObject(NamedProfile.KEY_STEER)?.let { Prefs.setGyroSteer(context, GyroSteerJson.fromJson(it)) }
             live.optJSONObject("mapping")?.let { mapObj ->
                 importMapping(mapObj) { button, target ->
                     Prefs.setMapping(context, button, target)

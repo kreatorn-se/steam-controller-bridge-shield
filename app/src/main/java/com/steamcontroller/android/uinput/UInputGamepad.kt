@@ -10,6 +10,8 @@ import com.steamcontroller.android.Prefs
 import com.steamcontroller.android.input.DEFAULT_ACTION_LAYER
 import com.steamcontroller.android.input.GyroActivation
 import com.steamcontroller.android.input.GyroAim
+import com.steamcontroller.android.input.GyroSteer
+import com.steamcontroller.android.input.GyroSteerTuning
 import com.steamcontroller.android.input.GyroTuning
 import com.steamcontroller.android.input.MOUSE_LEFT_PAD_CLICK_BIT
 import com.steamcontroller.android.input.MOUSE_MODE_FIXED_DPAD
@@ -225,6 +227,12 @@ class UInputGamepad(
     @Volatile private var cachedGyroActivation = GyroActivation.RIGHT_PAD_TOUCH
 
     @Volatile private var cachedGyroInvertY = false
+
+    // Gyro steering: the controller's turn as left-stick X (input/GyroSteer).
+    private val steer = GyroSteer()
+
+    @Volatile private var cachedSteer = GyroSteerTuning()
+    private var steerWasEngaged = false
 
     @Volatile private var cachedTrackpadAsMouse: Boolean = true
 
@@ -594,6 +602,7 @@ class UInputGamepad(
         cachedGyroTuning = Prefs.getGyroTuning(context)
         cachedGyroActivation = Prefs.getGyroActivation(context)
         cachedGyroInvertY = Prefs.getGyroInvertY(context)
+        cachedSteer = Prefs.getGyroSteer(context)
         cachedLeftOuter = Prefs.getStickOuter(context, true)
         cachedRightOuter = Prefs.getStickOuter(context, false)
         cachedLeftCurve = Prefs.getStickCurve(context, true)
@@ -637,6 +646,7 @@ class UInputGamepad(
         holdHandler.removeCallbacks(startHoldRelease)
         resetPointerState()
         gyro.reset()
+        steer.reset()
         sendNeutral(svc)
     }
 
@@ -652,6 +662,7 @@ class UInputGamepad(
         layerChordUsed = false
         resetPointerState()
         gyro.reset()
+        steer.reset()
         neutralSent = false
         sendNeutral(svc)
     }
@@ -792,7 +803,21 @@ class UInputGamepad(
         // Calibration, inner + outer deadzone and response curve, into per-frame scratch arrays.
         leftCal.applyShaped(state.leftJoyX.toInt(), state.leftJoyY.toInt(), cachedLeftOuter, cachedLeftCurve, leftOut)
         rightCal.applyShaped(state.rightJoyX.toInt(), state.rightJoyY.toInt(), cachedRightOuter, cachedRightCurve, rightOut)
-        val lxCal = leftOut[0]
+        // Gyro steering adds to the stick, so the thumb can still correct or take over.
+        val steerX =
+            steer.update(state.buttons, state.quatW, state.quatX, state.quatY, state.quatZ, cachedSteer)
+        val lxCal = (leftOut[0] + steerX).coerceIn(-32767, 32767)
+        if (steer.engaged != steerWasEngaged) {
+            steerWasEngaged = steer.engaged
+            // A toggle has no feel to it, so say it; a hold is obvious from the hand.
+            if (cachedSteer.activation.toggle) {
+                com.steamcontroller.android.ui.pill.Pill.show(
+                    context,
+                    com.steamcontroller.android.ui.pill.Pill.Kind.INFO,
+                    if (steer.engaged) "Steering on" else "Steering off",
+                )
+            }
+        }
         val lyCalRaw = leftOut[1]
         val rxCal = rightOut[0]
         val ryCalRaw = rightOut[1]
@@ -802,7 +827,8 @@ class UInputGamepad(
         var rx = rxCal
         var ry = -ryCalRaw.coerceAtLeast(-32767)
 
-        if (cachedGyroEnabled) {
+        // While steering, the controller's turn belongs to the wheel, not the camera.
+        if (cachedGyroEnabled && !steer.engaged) {
             val activation = cachedGyroActivation
             if (activation.mask == 0 || state.isButtonPressed(activation.mask)) {
                 gyro.update(

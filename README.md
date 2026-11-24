@@ -99,7 +99,7 @@ signed release builds: `scripts/generate-keystore.sh` makes a keystore, `keystor
 
 ## configuration
 
-live settings and game profiles live in `SharedPreferences`: transport and paired bt address, output mode, per-stick calibration (dead zone 0-30%, centre offset, invert y), per-button mapping (face / bumpers / triggers / stick clicks / system / back paddles / grips, or special actions like `📸 take screenshot`), rumble intensity 0-100%, mouse sensitivity, and named profiles each carrying its own copy plus the apps it switches on automatically.
+live settings and game profiles live in `SharedPreferences`: transport and paired bt address, output mode, per-stick calibration (dead zone 0-30%, centre offset, invert y), per-button mapping (face / bumpers / triggers / stick clicks / system / back paddles / grips, or special actions like `📸 take screenshot`), rumble intensity 0-100%, mouse sensitivity, gyro steering (`steer`: activation, axis, full lock, straight-ahead zone, curve, smoothing, invert), and named profiles each carrying its own copy plus the apps it switches on automatically.
 
 `export backup` / `import backup` in the game profiles screen moves all of it to one json file - useful before uninstalling or when moving to a new device.
 
@@ -111,6 +111,7 @@ live settings and game profiles live in `SharedPreferences`: transport and paire
 | usb rumble | not implemented - the controller only vibrates over bluetooth |
 | trackpads | usable as a mouse, not yet exposed as a ds4/ds5 touchpad to games that support one natively |
 | gyroscope | gyro aiming is mixed into the right stick (tuned and bias-calibrated on the calibration screen). games never see a real motion sensor |
+| gyro steering | the controller's turn (roll, or yaw) from where it was when steering switched on is added to left-stick x, so console-style driving games get a wheel. tuning → steer. with ps remote play (momiji / chiaki-ng on the shield) the ps5 just sees a stick |
 | steam button | passes through as `KEYCODE_BUTTON_MODE`, android treats it as the system guide key and may open the launcher |
 | shizuku at reboot | must be restarted by the user after each reboot (android 9 limitation, not the app's) |
 | rumble byte format | empirically tuned from the linux `hid-steam` driver |
