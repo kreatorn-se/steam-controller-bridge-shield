@@ -41,7 +41,7 @@ class GyroSteerTest {
         s.feed(q(0.0, 0.0, 1.0, 0.0))
         s.feed(q(22.5, 0.0, 1.0, 0.0))
         assertEquals(22.5f, s.angleDeg, 0.1f)
-        assertEquals(32767 / 2, s.stickX, 120)
+        assertEquals(32767 / 2.0, s.stickX.toDouble(), 120.0)
         s.feed(q(-50.0, 0.0, 1.0, 0.0))
         assertEquals(-32767, s.stickX)
         s.feed(q(80.0, 0.0, 1.0, 0.0))
@@ -129,7 +129,7 @@ class GyroSteerTest {
         val t = on.copy(smoothing = 0.5f)
         s.feed(q(0.0, 0.0, 1.0, 0.0), t)
         s.feed(q(45.0, 0.0, 1.0, 0.0), t)
-        assertEquals(32767 / 2, s.stickX, 2)
+        assertEquals(32767 / 2.0, s.stickX.toDouble(), 2.0)
     }
 
     @Test fun jsonRoundTripAndClamping() {
