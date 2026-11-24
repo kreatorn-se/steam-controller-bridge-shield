@@ -14,6 +14,7 @@ object ConfigExtras {
     val LIVE_KNOWN = setOf(
         "gamepadProfileId", "leftCal", "rightCal", "rumbleIntensity", "mouseSensitivity", "trackpadAsMouse",
         "lOuter", "rOuter", "lCurve", "rCurve", "padAccel", "gyro", "mapping", "desktopMapping", "actionLayer",
+        "steer",
     )
 
     private const val PREFS = "config_extras"

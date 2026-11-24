@@ -6,6 +6,8 @@ import com.steamcontroller.android.input.DEFAULT_ACTION_LAYER
 import com.steamcontroller.android.input.DEFAULT_DESKTOP_MAPPING
 import com.steamcontroller.android.input.DEFAULT_MAPPING
 import com.steamcontroller.android.input.GyroActivation
+import com.steamcontroller.android.input.GyroSteerJson
+import com.steamcontroller.android.input.GyroSteerTuning
 import com.steamcontroller.android.input.GyroTuning
 import com.steamcontroller.android.input.NamedProfile
 import com.steamcontroller.android.input.SteamButton
@@ -53,6 +55,7 @@ object Prefs {
     private const val PREF_GYRO_BIAS_Y = "gyro_bias_y"
     private const val PREF_GYRO_ACTIVATION = "gyro_activation"
     private const val PREF_GYRO_INVERT_Y = "gyro_invert_y"
+    private const val PREF_GYRO_STEER = "gyro_steer_json"
     private const val KEY_NAMED_PROFILES = "named_profiles_json"
     private const val KEY_ACTIVE_NAMED_PROFILE_ID = "active_named_profile_id"
 
@@ -404,6 +407,17 @@ object Prefs {
         prefs(context).edit().putBoolean(PREF_GYRO_INVERT_Y, invert).apply()
     }
 
+    /** Gyro steering (left stick X from the controller's turn), one JSON value. */
+    fun getGyroSteer(context: Context): GyroSteerTuning =
+        GyroSteerJson.parse(prefs(context).getString(PREF_GYRO_STEER, null))
+
+    fun setGyroSteer(
+        context: Context,
+        tuning: GyroSteerTuning,
+    ) {
+        prefs(context).edit().putString(PREF_GYRO_STEER, GyroSteerJson.toJson(tuning.clamped()).toString()).apply()
+    }
+
     // ─── Button mapping ──────────────────────────────────────────────────────
     // Gamepad and desktop mappings are the same table under different key prefixes.
     private const val MAP_PREFIX = "map_"
@@ -608,6 +622,7 @@ object Prefs {
             gyroInvertY = getGyroInvertY(context),
             gyroBiasX = gyro.biasX,
             gyroBiasY = gyro.biasY,
+            steer = getGyroSteer(context),
             boundPackages = boundPkgs,
             leftOuter = getStickOuter(context, true),
             rightOuter = getStickOuter(context, false),
@@ -659,6 +674,7 @@ object Prefs {
         setGyroResponse(context, profile.gyroResponse)
         setGyroInvertY(context, profile.gyroInvertY)
         setGyroBias(context, profile.gyroBiasX, profile.gyroBiasY)
+        profile.steer?.let { setGyroSteer(context, it) }
         setStickOuter(context, true, profile.leftOuter)
         setStickOuter(context, false, profile.rightOuter)
         setStickCurve(context, true, profile.leftCurve)

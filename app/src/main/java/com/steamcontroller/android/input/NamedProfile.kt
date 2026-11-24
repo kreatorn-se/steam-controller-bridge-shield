@@ -45,6 +45,11 @@ data class NamedProfile(
     val gyroInvertY: Boolean = false,
     val gyroBiasX: Float = 0f,
     val gyroBiasY: Float = 0f,
+    /**
+     * Gyro steering (JSON `steer`). Null when the profile has none (saved before 1.8.0, or written
+     * by a hub that does not know the key): applying it then leaves the current steering alone.
+     */
+    val steer: GyroSteerTuning? = null,
     val boundPackages: List<String> = emptyList(),
     // Response curves (JSON lOuter/rOuter/lCurve/rCurve/padAccel; optional, defaults = off).
     /** Outer deadzone, percent of stick travel that already counts as full deflection. 70..100. */
@@ -100,6 +105,7 @@ data class NamedProfile(
         put(KEY_GYRO_INVERT_Y, gyroInvertY)
         put(KEY_GYRO_BIAS_X, gyroBiasX.toDouble())
         put(KEY_GYRO_BIAS_Y, gyroBiasY.toDouble())
+        steer?.let { put(KEY_STEER, GyroSteerJson.toJson(it)) }
         put(KEY_BOUND, JSONArray(boundPackages))
         put(KEY_L_OUTER, leftOuter)
         put(KEY_R_OUTER, rightOuter)
@@ -146,6 +152,7 @@ data class NamedProfile(
         private const val KEY_GYRO_BIAS_X = "gyroBiasX"
         private const val KEY_GYRO_BIAS_Y = "gyroBiasY"
         private const val KEY_BOUND = "boundPackages"
+        const val KEY_STEER = "steer"
         const val KEY_L_OUTER = "lOuter"
         const val KEY_R_OUTER = "rOuter"
         const val KEY_L_CURVE = "lCurve"
@@ -160,6 +167,7 @@ data class NamedProfile(
             KEY_GYRO_ENABLED, KEY_GYRO_ACTIVATION, KEY_GYRO_SENS_X, KEY_GYRO_SENS_Y, KEY_GYRO_SMOOTHING,
             KEY_GYRO_DEADZONE, KEY_GYRO_RESPONSE, KEY_GYRO_INVERT_Y, KEY_GYRO_BIAS_X, KEY_GYRO_BIAS_Y, KEY_BOUND,
             KEY_L_OUTER, KEY_R_OUTER, KEY_L_CURVE, KEY_R_CURVE, KEY_PAD_ACCEL, KEY_STEAM_APPS, KEY_RADIAL,
+            KEY_STEER,
         )
 
         private fun extras(obj: JSONObject): String? = com.steamcontroller.android.backup.ConfigExtras.unknown(obj, KNOWN)
@@ -221,6 +229,7 @@ data class NamedProfile(
                 gyroInvertY = obj.optBoolean(KEY_GYRO_INVERT_Y, false),
                 gyroBiasX = obj.optDouble(KEY_GYRO_BIAS_X, 0.0).toFloat(),
                 gyroBiasY = obj.optDouble(KEY_GYRO_BIAS_Y, 0.0).toFloat(),
+                steer = obj.optJSONObject(KEY_STEER)?.let { GyroSteerJson.fromJson(it) },
                 boundPackages = bound,
                 leftOuter = clampOuter(obj.optInt(KEY_L_OUTER, 100)),
                 rightOuter = clampOuter(obj.optInt(KEY_R_OUTER, 100)),

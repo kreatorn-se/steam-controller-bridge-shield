@@ -12,6 +12,9 @@ import com.steamcontroller.android.Prefs
 import com.steamcontroller.android.R
 import com.steamcontroller.android.input.GyroActivation
 import com.steamcontroller.android.input.GyroAim
+import com.steamcontroller.android.input.GyroSteer
+import com.steamcontroller.android.input.SteerActivation
+import com.steamcontroller.android.input.SteerAxis
 import com.steamcontroller.android.parser.Buttons
 import com.steamcontroller.android.radial.Radial
 import com.steamcontroller.android.radial.RadialDescribe
@@ -46,6 +49,7 @@ class TuningPage(host: Host) : Page(host) {
     private val tabs = Segmented(ctx, listOf(
         ctx.getString(R.string.tune_left), ctx.getString(R.string.tune_right),
         ctx.getString(R.string.tune_pads), ctx.getString(R.string.tune_gyro),
+        ctx.getString(R.string.tune_steer),
     ), selectOnFocus = true) { show(it) }
     private val rowsBox = Kit.column(ctx)
     private val rowsScroll = ScrollView(ctx).apply {
@@ -64,6 +68,18 @@ class TuningPage(host: Host) : Page(host) {
         addView(gyroView, Kit.lp(h = 0, weight = 1.1f, ctx = ctx))
         addView(gyroGraph, Kit.lp(h = 0, weight = 1f, t = 8, ctx = ctx))
     }
+    // Steering preview: its own engine, always on, centred when the tab opens or on request.
+    private val steerView = GyroView(ctx).apply { showReadout = false }
+    private val steerGraph = CurveGraphView(ctx).apply { xLabel = "Turn"; yLabel = "Steer"; bandLabel = "Straight" }
+    private val steerReadout = Kit.label(ctx, "", 12f, C.text2)
+    private val steerStack = Kit.column(ctx).apply {
+        addView(steerView, Kit.lp(h = 0, weight = 1.1f, ctx = ctx))
+        addView(steerGraph, Kit.lp(h = 0, weight = 1f, t = 8, ctx = ctx))
+        addView(steerReadout, Kit.lp(t = 6, ctx = ctx))
+    }
+    private val steerPreview = GyroSteer()
+    private var steerAt = 0L
+    private var liveSteer = Prefs.getGyroSteer(ctx)
     private val rows = ArrayList<SettingRow>()
     private var tab = 0
     private var presetRow: LinearLayout? = null
@@ -132,7 +148,8 @@ class TuningPage(host: Host) : Page(host) {
         when (i) {
             0, 1 -> stickTab(left = i == 0)
             2 -> padTab()
-            else -> gyroTab()
+            3 -> gyroTab()
+            else -> steerTab()
         }
         updatePreview()
         syncPresets()
@@ -252,6 +269,43 @@ class TuningPage(host: Host) : Page(host) {
         }) as ActionRow
     }
 
+    private fun steerTab() {
+        previewTitle.text = ctx.getString(R.string.tune_steer_preview)
+        previewBox.addView(steerStack, Kit.frame())
+        recenterSteerPreview()
+        fun t() = Prefs.getGyroSteer(ctx)
+        fun put(f: (com.steamcontroller.android.input.GyroSteerTuning) -> com.steamcontroller.android.input.GyroSteerTuning) {
+            Prefs.setGyroSteer(ctx, f(t()))
+            liveSteer = Prefs.getGyroSteer(ctx)
+        }
+        add(ToggleRow(ctx, ctx.getString(R.string.steer_enable), ctx.getString(R.string.steer_enable_hint),
+            { t().enabled }, { on -> put { it.copy(enabled = on) } }))
+        add(ChoiceRow(ctx, ctx.getString(R.string.steer_activation), ctx.getString(R.string.steer_activation_hint),
+            SteerActivation.ALL.map { it.displayName },
+            { t().activation.ordinal }, { i -> put { it.copy(activation = SteerActivation.ALL[i]) } }))
+        add(ChoiceRow(ctx, ctx.getString(R.string.steer_axis), ctx.getString(R.string.steer_axis_hint),
+            SteerAxis.ALL.map { it.displayName },
+            { t().axis.ordinal }, { i -> put { it.copy(axis = SteerAxis.ALL[i]) }; recenterSteerPreview() }))
+        add(StepperRow(ctx, ctx.getString(R.string.steer_lock), ctx.getString(R.string.steer_lock_hint), 10f, 120f, 5f,
+            { "${it.toInt()}°" }, { t().lockDeg }, { v -> put { it.copy(lockDeg = v) } }) { updatePreview() })
+        add(StepperRow(ctx, ctx.getString(R.string.steer_deadzone), ctx.getString(R.string.steer_deadzone_hint), 0f, 15f, 0.5f,
+            { "%.1f°".format(it) }, { t().deadzoneDeg }, { v -> put { it.copy(deadzoneDeg = v) } }) { updatePreview() })
+        add(StepperRow(ctx, ctx.getString(R.string.steer_curve), ctx.getString(R.string.steer_curve_hint), 0.5f, 3f, 0.05f,
+            { "%.2f".format(it) }, { t().curve }, { v -> put { it.copy(curve = v) } }) { updatePreview() })
+        add(StepperRow(ctx, ctx.getString(R.string.calib_gyro_smoothing), null, 0f, 0.9f, 0.05f,
+            { "${(it * 100).toInt()} %" }, { t().smoothing }, { v -> put { it.copy(smoothing = v) } }))
+        add(ToggleRow(ctx, ctx.getString(R.string.steer_invert), ctx.getString(R.string.steer_invert_hint),
+            { t().invert }, { on -> put { it.copy(invert = on) } }))
+        add(ActionRow(ctx, ctx.getString(R.string.steer_recenter), ctx.getString(R.string.steer_recenter_hint)) {
+            recenterSteerPreview()
+        })
+    }
+
+    private fun recenterSteerPreview() {
+        steerPreview.reset()
+        steerView.recenter()
+    }
+
     private fun onCurveChanged() { updatePreview(); syncPresets() }
 
     private fun updatePreview() {
@@ -267,11 +321,17 @@ class TuningPage(host: Host) : Page(host) {
                 val a = Prefs.getPadAcceleration(ctx)
                 graph.setCurve(0f, 1f) { Curve.padAccel(it, a) }
             }
-            else -> {
+            3 -> {
                 // Plotted over 0..0.5 rad/s, where the deadzone and the curve's shape are visible.
                 val dz = Prefs.getGyroDeadzone(ctx) / 0.5f
                 val exp = Prefs.getGyroResponse(ctx)
                 gyroGraph.setCurve(dz, 1f) { Curve.gyro(it, dz, exp) }
+            }
+            else -> {
+                // Plotted from straight ahead to full lock.
+                val t = Prefs.getGyroSteer(ctx)
+                liveSteer = t
+                steerGraph.setCurve(t.deadzoneDeg / t.lockDeg, 1f) { GyroSteer.shape(it * t.lockDeg, t) }
             }
         }
     }
@@ -292,7 +352,7 @@ class TuningPage(host: Host) : Page(host) {
     }
 
     override fun onFrame(f: LiveFrame) {
-        val s = f.state ?: run { graph.setLive(-1f); gyroGraph.setLive(-1f); return }
+        val s = f.state ?: run { graph.setLive(-1f); gyroGraph.setLive(-1f); steerGraph.setLive(-1f); return }
         when (tab) {
             0, 1 -> {
                 val left = tab == 0
@@ -321,7 +381,7 @@ class TuningPage(host: Host) : Page(host) {
                 lastPadX = x; lastPadY = y
                 graph.setLive(if (touching) padSpeed else -1f)
             }
-            else -> {
+            3 -> {
                 gyroView.setQuaternion(s.quatW, s.quatX, s.quatY, s.quatZ)
                 val cal = calibrator
                 if (cal != null) {
@@ -334,7 +394,31 @@ class TuningPage(host: Host) : Page(host) {
                 }
                 gyroRate(s.quatW, s.quatX, s.quatY, s.quatZ)
             }
+            else -> steerFrame(s)
         }
+    }
+
+    /** The preview runs the runtime's own engine, always on, so the dot is exactly what games get. */
+    private fun steerFrame(s: com.steamcontroller.android.parser.SteamControllerState) {
+        steerView.setQuaternion(s.quatW, s.quatX, s.quatY, s.quatZ)
+        val t = liveSteer.copy(enabled = true, activation = SteerActivation.ALWAYS)
+        val out = steerPreview.update(0, s.quatW, s.quatX, s.quatY, s.quatZ, t)
+        val a = steerPreview.angleDeg
+        if (a.isNaN()) {
+            steerGraph.setLive(-1f)
+            steerReadout.text = ctx.getString(R.string.steer_no_data)
+            return
+        }
+        steerGraph.setLive(abs(a) / t.lockDeg, abs(out) / 32767f)
+        val now = SystemClock.uptimeMillis()
+        if (now - steerAt < 80L) return
+        steerAt = now
+        val side = when {
+            out > 0 -> ctx.getString(R.string.steer_right)
+            out < 0 -> ctx.getString(R.string.steer_left)
+            else -> ctx.getString(R.string.steer_straight)
+        }
+        steerReadout.text = ctx.getString(R.string.steer_readout, a, abs(out) * 100 / 32767, side)
     }
 
     // A rough angular speed for the live dot on the gyro curve.
